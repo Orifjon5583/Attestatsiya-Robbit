@@ -219,22 +219,43 @@ a { color: #5eb8ff; }
   max-height: calc(100vh - 124px);
   padding-bottom: 76px;
   display: grid;
-  gap: 18px;
+  align-content: start;
+  gap: 8px;
   overflow-y: auto;
 }
 
 .nav-group {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
-.nav-group > span {
+.nav-group-toggle {
+  min-height: 34px !important;
+  padding: 6px 12px !important;
+  justify-content: space-between;
+}
+
+.nav-group-toggle span {
   padding: 0 12px;
   color: #6f82a0;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: .08em;
   text-transform: uppercase;
+}
+
+.nav-group-toggle svg {
+  color: #6f82a0;
+  transition: transform .18s ease;
+}
+
+.nav-group.open .nav-group-toggle svg {
+  transform: rotate(90deg);
+}
+
+.nav-group-items {
+  display: grid;
+  gap: 4px;
 }
 
 .sidebar nav button,
@@ -285,6 +306,31 @@ a { color: #5eb8ff; }
 .topbar span { display: block; margin-top: 3px; font-size: 13px; }
 .top-actions { display: flex; align-items: center; gap: 12px; color: #8ea5c7; }
 .icon-btn { width: 38px; min-height: 38px; padding: 0; }
+.badge-button {
+  position: relative;
+}
+
+.badge-button i,
+.message-users b {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.badge-button i {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+}
+
 .flip-icon { transform: rotate(180deg); }
 
 .avatar,
@@ -552,6 +598,18 @@ pre { padding: 18px; }
   font-weight: 800;
 }
 
+.db-status {
+  border-color: rgba(245, 158, 11, .3);
+  background: rgba(245, 158, 11, .12);
+  color: #f8d58a;
+}
+
+.db-status.connected {
+  border-color: rgba(34, 197, 94, .28);
+  background: rgba(34, 197, 94, .1);
+  color: #85f2b2;
+}
+
 .exam-page { max-width: 980px; margin: 0 auto; }
 .result-page { text-align: center; }
 .result-page h2 { font-size: 34px; }
@@ -619,6 +677,12 @@ pre { padding: 18px; }
   align-items: center;
 }
 
+.profile-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+
 dl {
   display: grid;
   grid-template-columns: 130px 1fr;
@@ -636,6 +700,172 @@ dd { margin: 0; }
   align-items: center;
   border-radius: 8px;
   background: rgba(31, 48, 75, .66);
+}
+
+.messages-page {
+  max-width: 1160px;
+  margin: 0 auto;
+}
+
+.messages-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, .34fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.messages-layout.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.message-users,
+.message-thread,
+.message-list {
+  min-width: 0;
+}
+
+.message-users {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(125, 153, 190, .14);
+  border-radius: 8px;
+  background: rgba(12, 21, 36, .42);
+}
+
+.message-users button {
+  min-height: 64px;
+  position: relative;
+  justify-content: center;
+  text-align: left;
+  background: transparent;
+}
+
+.message-users button.active {
+  border-color: rgba(88, 166, 255, .65);
+  background: rgba(26, 119, 255, .16);
+}
+
+.message-users span,
+.message-users small {
+  display: block;
+}
+
+.message-users b {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.message-empty-state {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  border: 1px dashed rgba(125, 153, 190, .28);
+  border-radius: 8px;
+  background: rgba(12, 21, 36, .32);
+  color: #aebdd3;
+  text-align: center;
+}
+
+.message-empty-state h3,
+.message-empty-state p {
+  margin: 0;
+}
+
+.message-thread {
+  min-height: 560px;
+  width: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(260px, 1fr) auto;
+  border: 1px solid rgba(125, 153, 190, .14);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(12, 21, 36, .42);
+}
+
+.message-thread-head {
+  min-height: 74px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid rgba(125, 153, 190, .14);
+  background: rgba(20, 39, 70, .42);
+}
+
+.message-thread-head h3 {
+  margin: 0;
+}
+
+.message-thread-head small {
+  color: #91a4c0;
+}
+
+.message-list {
+  max-height: none;
+  min-height: 0;
+  padding: 18px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  overflow: auto;
+  background: rgba(8, 17, 31, .28);
+}
+
+.message-list article {
+  max-width: min(78%, 620px);
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(31, 48, 75, .9);
+  box-shadow: 0 14px 28px rgba(4, 10, 22, .16);
+}
+
+.message-list .notification {
+  width: min(100%, 460px);
+  margin: 0;
+  grid-template-columns: 36px 1fr;
+}
+
+.message-list article p { margin: 6px 0; }
+.message-list article small { color: #91a4c0; }
+.message-list .admin-message {
+  justify-self: end;
+  border-bottom-right-radius: 3px;
+  background: rgba(26, 119, 255, .28);
+}
+
+.message-list .user-message {
+  justify-self: start;
+  border-bottom-left-radius: 3px;
+}
+
+.message-compose {
+  margin-top: 0;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  border-top: 1px solid rgba(125, 153, 190, .14);
+  background: rgba(20, 39, 70, .36);
+}
+
+.message-compose textarea {
+  min-height: 52px;
+  max-height: 140px;
+  width: 100%;
+  min-width: 0;
+  border-radius: 8px;
+  background: rgba(8, 17, 31, .72);
+}
+
+.message-compose button {
+  min-width: 150px;
+  min-height: 52px;
 }
 
 .admin-bottom,
@@ -720,6 +950,45 @@ dd { margin: 0; }
 
 .student-track small {
   display: block;
+}
+
+.mini-user-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mini-user-list span {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .14);
+  color: #cbd6e8;
+  font-size: 12px;
+}
+
+.user-admin-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.user-admin-list button {
+  min-height: 74px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  background: #101c2e;
+}
+
+.user-admin-list button.active {
+  border-color: rgba(88, 166, 255, .65);
+  background: rgba(26, 119, 255, .16);
+}
+
+.user-admin-list small,
+.user-admin-list span {
+  color: #aebdd3;
 }
 
 .form-panel { max-width: 900px; }
@@ -859,6 +1128,7 @@ dd { margin: 0; }
   .admin-dashboard-grid,
   .access-grid,
   .content-form-grid,
+  .messages-layout,
   .profile-grid {
     grid-template-columns: 1fr;
   }
@@ -919,10 +1189,15 @@ dd { margin: 0; }
 
   .topbar,
   .title,
-  .notification {
+  .notification,
+  .message-compose {
     align-items: flex-start;
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .message-list article {
+    max-width: 100%;
   }
 
   .certificate { padding: 36px 20px; }

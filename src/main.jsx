@@ -35,6 +35,22 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
+const API_URL = import.meta.env.VITE_API_URL || '/api';
+const APP_STATE_STORAGE_KEY = 'attestatsiya.appState';
+
+const iconRegistry = {
+  Award,
+  BookOpen,
+  Bot,
+  Code2,
+  Cpu,
+  FileCode,
+  Lock,
+  Rocket,
+  Settings,
+  ShieldCheck,
+};
+
 const columnAliases = {
   direction: ['direction', 'yonalish', "yo'nalish", 'kurs', 'fan'],
   topic: ['topic', 'mavzu', 'dars'],
@@ -84,8 +100,43 @@ function writeStored(key, value) {
   }
 }
 
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+function serializeDirections(directionList) {
+  return directionList.map((item) => {
+    const icon = Object.entries(iconRegistry).find(([, Icon]) => Icon === item.icon)?.[0] || item.icon || 'BookOpen';
+    return { ...item, icon };
+  });
+}
+
+function hydrateDirections(directionList) {
+  return directionList.map((item) => ({
+    ...item,
+    icon: iconRegistry[item.icon] || iconRegistry[item.iconName] || BookOpen,
+  }));
+}
+
+function createAppStateSnapshot({ managedDirections, directionLessons, lessonContents, users, questions, messages }) {
+  return {
+    directions: serializeDirections(managedDirections),
+    directionLessons,
+    lessonContents,
+    users,
+    questions,
+    messages,
+  };
+}
+
 function normalizeSection(value, answers) {
   const text = normalize(value);
+  if (text.includes('loyiha') || text.includes('final task') || text.includes('yakuniy topshiriq')) return 'final';
   if (text.includes('amaliy') || text.includes('practice') || text.includes('kod')) return 'practice';
   if (text.includes('yakun') || text.includes('exam')) return 'exam';
   if (text.includes('nazari') || text.includes('theory')) return 'theory';
@@ -131,11 +182,11 @@ function mapExcelQuestion(row) {
 const directions = [
   { title: 'Python Dasturlash', icon: Code2, progress: 0, open: true, color: '#27a8ff' },
   { title: 'Arduino', icon: Cpu, progress: 0, open: false, color: '#14b8a6' },
-  { title: 'Web Dasturlash', icon: Lock, progress: 0, open: false, color: '#8b9bb2' },
   { title: 'App Inventor', icon: Bot, progress: 0, open: false, color: '#94a3b8' },
   { title: 'Onshape', icon: Settings, progress: 0, open: false, color: '#22c55e' },
   { title: 'ESP32', icon: Cpu, progress: 0, open: false, color: '#64748b' },
   { title: 'IoT (Blynk)', icon: ShieldCheck, progress: 0, open: false, color: '#64748b' },
+  { title: 'Web Dasturlash', icon: FileCode, progress: 0, open: false, color: '#8b9bb2' },
 ];
 
 const initialDirectionAccess = Object.fromEntries(directions.map((item, index) => [item.title, index === 0]));
@@ -151,7 +202,25 @@ const lessons = [
   'Functions',
 ];
 
-const initialDirectionLessons = Object.fromEntries(directions.map((item) => [item.title, lessons]));
+const webLessons = ['HTML', 'CSS', 'JavaScript'];
+
+const initialDirectionLessons = Object.fromEntries(
+  directions.map((item) => [item.title, item.title === 'Web Dasturlash' ? webLessons : lessons]),
+);
+
+function putWebDirectionLast(directionList) {
+  const list = Array.isArray(directionList) ? directionList : directions;
+  const webDirection = list.find((item) => item.title === 'Web Dasturlash');
+  const otherDirections = list.filter((item) => item.title !== 'Web Dasturlash');
+  return webDirection ? [...otherDirections, { ...webDirection, icon: FileCode }] : otherDirections;
+}
+
+function normalizeDirectionLessonsMap(directionLessons) {
+  return {
+    ...(directionLessons || {}),
+    'Web Dasturlash': webLessons,
+  };
+}
 
 const initialLessonContents = {
   'Variables (O\'zgaruvchilar)': {
@@ -159,6 +228,44 @@ const initialLessonContents = {
     text: "O'zgaruvchi dasturda qiymat saqlash uchun nomlangan joydir. Python'da o'zgaruvchi nomi yozilib, unga qiymat beriladi.",
     videoUrl: '',
   },
+};
+
+const initialStudentProfile = {
+  fullName: 'Sardor Karimov',
+  email: 'em.sardor@gmail.com',
+  phone: '+998 90 123 45 67',
+  birthDate: '15.01.2004',
+  roleLabel: "O'quvchi",
+};
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function createStudentUser({ fullName, email, password }) {
+  const normalizedEmail = normalizeEmail(email);
+  return {
+    email: normalizedEmail,
+    password,
+    profile: {
+      ...initialStudentProfile,
+      fullName: fullName?.trim() || initialStudentProfile.fullName,
+      email: normalizedEmail,
+    },
+    directionAccess: initialDirectionAccess,
+    lessonAccess: initialLessonAccess,
+    completedDirections: [],
+    result: null,
+  };
+}
+
+const defaultStudentEmail = normalizeEmail(initialStudentProfile.email);
+const initialUsers = {
+  [defaultStudentEmail]: createStudentUser({
+    fullName: initialStudentProfile.fullName,
+    email: defaultStudentEmail,
+    password: '123456',
+  }),
 };
 
 const starterQuestions = [
@@ -224,6 +331,7 @@ const adminNav = [
     title: "O'quvchi",
     items: [
       { id: 'admin-access', label: 'Ruxsatlar', icon: ShieldCheck },
+      { id: 'admin-users', label: 'User loginlari', icon: Users },
     ],
   },
   {
@@ -243,6 +351,13 @@ function getUnlockedLessonCount(lessonAccess, direction, courseLessons) {
   return clampLessonCount(lessonAccess[direction] || 1, courseLessons);
 }
 
+function getDirectionProgress(directionAccess, lessonAccess, completedDirections, direction, courseLessons) {
+  if (!directionAccess[direction]) return 0;
+  if (!courseLessons.length) return 0;
+  if (completedDirections.includes(direction)) return 100;
+  return Math.round((getUnlockedLessonCount(lessonAccess, direction, courseLessons) / courseLessons.length) * 100);
+}
+
 function getNextDirection(directionList, title) {
   const list = directionList?.length ? directionList : directions;
   const index = list.findIndex((item) => item.title === title);
@@ -250,19 +365,27 @@ function getNextDirection(directionList, title) {
 }
 
 function App() {
-  const [screen, setScreen] = useState('home');
-  const [role, setRole] = useState('student');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const savedSession = readStored('attestatsiya.session', null);
+  const [screen, setScreen] = useState(savedSession?.authenticated ? (savedSession.role === 'admin' ? 'admin' : 'dashboard') : 'home');
+  const [role, setRole] = useState(savedSession?.role || 'student');
+  const [isAuthenticated, setIsAuthenticated] = useState(Boolean(savedSession?.authenticated));
+  const [currentUserEmail, setCurrentUserEmail] = useState(normalizeEmail(savedSession?.email || defaultStudentEmail));
+  const [databaseStatus, setDatabaseStatus] = useState('checking');
+  const [saveStatus, setSaveStatus] = useState('idle');
+  const [appStateLoaded, setAppStateLoaded] = useState(false);
   const [selectedDirection, setSelectedDirection] = useState('Python Dasturlash');
   const [selectedLesson, setSelectedLesson] = useState(0);
   const [managedDirections, setManagedDirections] = useState(directions);
   const [directionLessons, setDirectionLessons] = useState(initialDirectionLessons);
   const [lessonContents, setLessonContents] = useState(initialLessonContents);
+  const [users, setUsers] = useState(initialUsers);
+  const [studentProfile, setStudentProfile] = useState(initialStudentProfile);
   const [questions, setQuestions] = useState(() => {
     const stored = readStored('attestatsiya.questions', []);
     const storedIds = new Set(stored.map((item) => item.id));
     return [...starterQuestions.filter((item) => !storedIds.has(item.id)), ...stored];
   });
+  const [messages, setMessages] = useState([]);
   const [result, setResult] = useState(null);
   const [directionAccess, setDirectionAccess] = useState(initialDirectionAccess);
   const [lessonAccess, setLessonAccess] = useState(initialLessonAccess);
@@ -272,6 +395,124 @@ function App() {
   useEffect(() => {
     writeStored('attestatsiya.questions', questions);
   }, [questions]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    writeStored('attestatsiya.session', { authenticated: true, role, email: currentUserEmail });
+  }, [currentUserEmail, isAuthenticated, role]);
+
+  function applyUserState(user) {
+    if (!user) return;
+    setStudentProfile({ ...initialStudentProfile, ...user.profile, email: normalizeEmail(user.email || user.profile?.email) });
+    setDirectionAccess(user.directionAccess || initialDirectionAccess);
+    setLessonAccess(user.lessonAccess || initialLessonAccess);
+    setCompletedDirections(user.completedDirections || []);
+    setResult(user.result || null);
+  }
+
+  function applyAppState(data) {
+    if (Array.isArray(data.directions) && data.directions.length) {
+      setManagedDirections(putWebDirectionLast(hydrateDirections(data.directions)));
+    }
+    setDirectionLessons(normalizeDirectionLessonsMap(data.directionLessons || initialDirectionLessons));
+    if (data.lessonContents) setLessonContents(data.lessonContents);
+    if (Array.isArray(data.questions) && data.questions.length) setQuestions(data.questions);
+    if (Array.isArray(data.messages)) setMessages(data.messages);
+
+    const loadedUsers = data.users || {
+      [defaultStudentEmail]: {
+        ...initialUsers[defaultStudentEmail],
+        profile: { ...initialStudentProfile, ...(data.studentProfile || {}) },
+        directionAccess: data.directionAccess || initialDirectionAccess,
+        lessonAccess: data.lessonAccess || initialLessonAccess,
+        completedDirections: data.completedDirections || [],
+        result: data.result || null,
+      },
+    };
+    setUsers(loadedUsers);
+    const selectedUser = loadedUsers[currentUserEmail] || Object.values(loadedUsers)[0];
+    if (selectedUser?.email) setCurrentUserEmail(normalizeEmail(selectedUser.email));
+    applyUserState(selectedUser);
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadAppState() {
+      const localState = readStored(APP_STATE_STORAGE_KEY, null);
+      if (localState) applyAppState(localState);
+
+      try {
+        const payload = await apiRequest('/app-state');
+        const data = payload.data || {};
+        if (!active) return;
+
+        applyAppState(data);
+        setDatabaseStatus('connected');
+      } catch {
+        if (!localState) {
+          const fallbackUser = users[currentUserEmail] || initialUsers[defaultStudentEmail];
+          setCurrentUserEmail(normalizeEmail(fallbackUser.email));
+          applyUserState(fallbackUser);
+        }
+        if (active) setDatabaseStatus('offline');
+      } finally {
+        if (active) setAppStateLoaded(true);
+      }
+    }
+
+    loadAppState();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!appStateLoaded) return;
+    const snapshot = createAppStateSnapshot({ managedDirections, directionLessons, lessonContents, users, questions, messages });
+    writeStored(APP_STATE_STORAGE_KEY, snapshot);
+    setSaveStatus('saving');
+
+    const timeoutId = setTimeout(() => {
+      apiRequest('/app-state', {
+        method: 'PUT',
+        body: JSON.stringify({
+          data: snapshot,
+          actorRole: role,
+          actorEmail: currentUserEmail,
+        }),
+      })
+        .then(() => {
+          setDatabaseStatus('connected');
+          setSaveStatus('saved');
+        })
+        .catch(() => {
+          setDatabaseStatus('offline');
+          setSaveStatus('local');
+        });
+    }, 450);
+
+    return () => clearTimeout(timeoutId);
+  }, [appStateLoaded, currentUserEmail, directionLessons, lessonContents, managedDirections, messages, questions, role, users]);
+
+  useEffect(() => {
+    if (!currentUserEmail) return;
+    setUsers((current) => {
+      const user = current[currentUserEmail];
+      if (!user) return current;
+      return {
+        ...current,
+        [currentUserEmail]: {
+          ...user,
+          profile: { ...studentProfile, email: currentUserEmail },
+          directionAccess,
+          lessonAccess,
+          completedDirections,
+          result,
+        },
+      };
+    });
+  }, [completedDirections, currentUserEmail, directionAccess, lessonAccess, result, studentProfile]);
 
   function updateCourseLessons(direction, updater) {
     setDirectionLessons((current) => {
@@ -296,19 +537,59 @@ function App() {
     openDirection(getNextDirection(managedDirections, title));
   }
 
+  function authenticateStudent(email, password) {
+    const normalizedEmail = normalizeEmail(email);
+    const user = users[normalizedEmail];
+    if (!user || user.password !== password) return false;
+    setRole('student');
+    setCurrentUserEmail(normalizedEmail);
+    applyUserState(user);
+    setIsAuthenticated(true);
+    setScreen('dashboard');
+    writeStored('attestatsiya.session', { authenticated: true, role: 'student', email: normalizedEmail });
+    return true;
+  }
+
+  function registerStudent({ fullName, email, password }) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !password || !fullName.trim()) return { ok: false, message: "Ism, email va parolni to'ldiring." };
+    if (users[normalizedEmail]) return { ok: false, message: 'Bu email bilan hisob allaqachon mavjud.' };
+
+    const user = createStudentUser({ fullName, email: normalizedEmail, password });
+    setUsers((current) => ({ ...current, [normalizedEmail]: user }));
+    setRole('student');
+    setCurrentUserEmail(normalizedEmail);
+    applyUserState(user);
+    setIsAuthenticated(true);
+    setScreen('dashboard');
+    writeStored('attestatsiya.session', { authenticated: true, role: 'student', email: normalizedEmail });
+    return { ok: true };
+  }
+
+  function loginAdmin() {
+    const firstUser = users[currentUserEmail] || Object.values(users)[0] || initialUsers[defaultStudentEmail];
+    setRole('admin');
+    setCurrentUserEmail(firstUser.email);
+    applyUserState(firstUser);
+    setIsAuthenticated(true);
+    setScreen('admin');
+    writeStored('attestatsiya.session', { authenticated: true, role: 'admin', email: firstUser.email });
+  }
+
   function logout() {
     setRole('student');
     setIsAuthenticated(false);
     setResult(null);
+    localStorage.removeItem('attestatsiya.session');
     setScreen('login');
   }
 
   const page = useMemo(() => {
-    const props = { setScreen, selectedDirection, setSelectedDirection, selectedLesson, setSelectedLesson, courseLessons, setCourseLessons, directionLessons, setDirectionLessons, updateCourseLessons, lessonContents, setLessonContents, questions, setQuestions, result, setResult, directionAccess, setDirectionAccess, lessonAccess, setLessonAccess, completedDirections, completeDirection, directions: managedDirections, setDirections: setManagedDirections };
+    const props = { setScreen, selectedDirection, setSelectedDirection, selectedLesson, setSelectedLesson, courseLessons, setCourseLessons, directionLessons, setDirectionLessons, updateCourseLessons, lessonContents, setLessonContents, studentProfile, setStudentProfile, questions, setQuestions, result, setResult, directionAccess, setDirectionAccess, lessonAccess, setLessonAccess, completedDirections, completeDirection, directions: managedDirections, setDirections: setManagedDirections };
     if (screen === 'home') return <HomePage setScreen={setScreen} />;
-    if (screen === 'register') return <RegisterPage setScreen={setScreen} setIsAuthenticated={setIsAuthenticated} />;
-    if (screen === 'login') return <LoginPage setScreen={setScreen} setRole={setRole} setIsAuthenticated={setIsAuthenticated} />;
-    if (!isAuthenticated) return <LoginPage setScreen={setScreen} setRole={setRole} setIsAuthenticated={setIsAuthenticated} />;
+    if (screen === 'register') return <RegisterPage setScreen={setScreen} onRegister={registerStudent} />;
+    if (screen === 'login') return <LoginPage setScreen={setScreen} onLogin={authenticateStudent} onAdminLogin={loginAdmin} />;
+    if (!isAuthenticated) return <LoginPage setScreen={setScreen} onLogin={authenticateStudent} onAdminLogin={loginAdmin} />;
     if (screen === 'dashboard') return <DashboardPage {...props} />;
     if (screen === 'directions') return <DirectionsPage {...props} />;
     if (screen === 'courses') return <CoursesPage {...props} />;
@@ -319,17 +600,18 @@ function App() {
     if (screen === 'final') return <FinalTaskPage {...props} />;
     if (screen === 'exam') return <ExamPage {...props} />;
     if (screen === 'result') return <ResultPage {...props} />;
-    if (screen === 'certificate') return <CertificatePage selectedDirection={selectedDirection} result={result} />;
-    if (screen === 'profile') return <ProfilePage />;
-    if (screen === 'notifications') return <NotificationsPage />;
-    if (screen === 'admin') return <AdminDashboard questions={questions} directionAccess={directionAccess} lessonAccess={lessonAccess} directionLessons={directionLessons} completedDirections={completedDirections} directions={managedDirections} setScreen={setScreen} />;
-    if (screen === 'admin-directions') return <AdminDirections directions={managedDirections} setDirections={setManagedDirections} setDirectionAccess={setDirectionAccess} setLessonAccess={setLessonAccess} setDirectionLessons={setDirectionLessons} setSelectedDirection={setSelectedDirection} />;
+    if (screen === 'certificate') return <CertificatePage selectedDirection={selectedDirection} result={result} studentProfile={studentProfile} />;
+    if (screen === 'profile') return <ProfilePage studentProfile={studentProfile} setStudentProfile={setStudentProfile} />;
+    if (screen === 'notifications') return <NotificationsPage role={role} currentUserEmail={currentUserEmail} users={users} messages={messages} setMessages={setMessages} />;
+    if (screen === 'admin') return <AdminDashboard questions={questions} directionAccess={directionAccess} lessonAccess={lessonAccess} directionLessons={directionLessons} completedDirections={completedDirections} directions={managedDirections} setScreen={setScreen} databaseStatus={databaseStatus} saveStatus={saveStatus} studentProfile={studentProfile} users={users} />;
+    if (screen === 'admin-directions') return <AdminDirections directions={managedDirections} setDirections={setManagedDirections} setDirectionAccess={setDirectionAccess} setLessonAccess={setLessonAccess} setDirectionLessons={setDirectionLessons} setSelectedDirection={setSelectedDirection} setUsers={setUsers} />;
     if (screen === 'admin-questions') return <AdminQuestions questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
-    if (screen === 'admin-access') return <AdminAccess directionAccess={directionAccess} setDirectionAccess={setDirectionAccess} lessonAccess={lessonAccess} setLessonAccess={setLessonAccess} directionLessons={directionLessons} completedDirections={completedDirections} directions={managedDirections} />;
+    if (screen === 'admin-access') return <AdminAccess directionLessons={directionLessons} directions={managedDirections} users={users} setUsers={setUsers} currentUserEmail={currentUserEmail} setDirectionAccess={setDirectionAccess} setLessonAccess={setLessonAccess} setCompletedDirections={setCompletedDirections} />;
+    if (screen === 'admin-users') return <AdminUsers users={users} setUsers={setUsers} messages={messages} setMessages={setMessages} currentUserEmail={currentUserEmail} setCurrentUserEmail={setCurrentUserEmail} setStudentProfile={setStudentProfile} />;
     if (screen === 'admin-topic') return <AdminTopic {...props} />;
     if (screen === 'admin-lesson') return <AdminLesson {...props} />;
     return <DashboardPage {...props} />;
-  }, [completedDirections, courseLessons, directionAccess, directionLessons, isAuthenticated, lessonAccess, lessonContents, managedDirections, questions, result, screen, selectedDirection, selectedLesson]);
+  }, [completedDirections, courseLessons, currentUserEmail, databaseStatus, directionAccess, directionLessons, isAuthenticated, lessonAccess, lessonContents, managedDirections, messages, questions, result, role, saveStatus, screen, selectedDirection, selectedLesson, studentProfile, users]);
 
   if (['home', 'register', 'login'].includes(screen) || !isAuthenticated) return page;
 
@@ -337,7 +619,7 @@ function App() {
     <div className="shell">
       <Sidebar role={role} screen={screen} setScreen={setScreen} onLogout={logout} />
       <main className="main">
-        <Topbar role={role} setRole={setRole} setScreen={setScreen} />
+        <Topbar role={role} setRole={setRole} setScreen={setScreen} studentProfile={studentProfile} currentUserEmail={currentUserEmail} messages={messages} />
         {page}
       </main>
     </div>
@@ -376,18 +658,34 @@ function HomePage({ setScreen }) {
   );
 }
 
-function RegisterPage({ setScreen, setIsAuthenticated }) {
+function RegisterPage({ setScreen, onRegister }) {
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [message, setMessage] = useState('');
+
+  function submit() {
+    if (password !== confirmPassword) {
+      setMessage('Parol tasdigʻi mos emas.');
+      return;
+    }
+    const result = onRegister({ fullName, email, password });
+    if (!result.ok) setMessage(result.message);
+  }
+
   return (
     <div className="public auth-split">
       <form className="auth-card">
         <Brand />
         <h2>Ro'yxatdan o'tish</h2>
-        <label>Ism<input placeholder="Ismingiz" /></label>
-        <label>Email<input placeholder="Email" /></label>
-        <label>Parol<input type="password" placeholder="Parol" /></label>
-        <label>Parolni tasdiqlang<input type="password" placeholder="Qayta kiriting" /></label>
+        <label>Ism<input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Ismingiz" /></label>
+        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" /></label>
+        <label>Parol<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Parol" /></label>
+        <label>Parolni tasdiqlang<input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Qayta kiriting" /></label>
         <label className="check"><input type="checkbox" defaultChecked /> Men foydalanish shartlari bilan roziman</label>
-        <button type="button" className="primary wide" onClick={() => { setIsAuthenticated?.(true); setScreen('dashboard'); }}><UserPlus size={18} /> Ro'yxatdan o'tish</button>
+        {message && <div className="notice auth-notice"><InfoIcon size={18} /> {message}</div>}
+        <button type="button" className="primary wide" onClick={submit}><UserPlus size={18} /> Ro'yxatdan o'tish</button>
         <p>Hisobingiz bormi? <button type="button" className="link" onClick={() => setScreen('login')}><LogIn size={15} /> Kirish</button></p>
       </form>
       <StudentVisual variant="front" compact />
@@ -395,16 +693,25 @@ function RegisterPage({ setScreen, setIsAuthenticated }) {
   );
 }
 
-function LoginPage({ setScreen, setRole, setIsAuthenticated }) {
+function LoginPage({ setScreen, onLogin, onAdminLogin }) {
+  const [email, setEmail] = useState(defaultStudentEmail);
+  const [password, setPassword] = useState('123456');
+  const [message, setMessage] = useState('');
+
+  function submit() {
+    if (!onLogin(email, password)) setMessage('Email yoki parol notoʻgʻri.');
+  }
+
   return (
     <div className="public auth-split">
       <form className="auth-card">
         <Brand />
         <h2>Tizimga kirish</h2>
-        <label>Email<input defaultValue="example@gmail.com" /></label>
-        <label>Parol<input type="password" defaultValue="123456" /></label>
-        <button type="button" className="primary wide" onClick={() => { setRole('student'); setIsAuthenticated(true); setScreen('dashboard'); }}><LogIn size={18} /> Kirish</button>
-        <button type="button" className="ghost wide" onClick={() => { setRole('admin'); setIsAuthenticated(true); setScreen('admin'); }}><ShieldCheck size={18} /> Admin sifatida kirish</button>
+        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label>Parol<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        {message && <div className="notice auth-notice"><InfoIcon size={18} /> {message}</div>}
+        <button type="button" className="primary wide" onClick={submit}><LogIn size={18} /> Kirish</button>
+        <button type="button" className="ghost wide" onClick={onAdminLogin}><ShieldCheck size={18} /> Admin sifatida kirish</button>
         <p>Hisobingiz yo'qmi? <button type="button" className="link" onClick={() => setScreen('register')}><UserPlus size={15} /> Ro'yxatdan o'tish</button></p>
       </form>
       <StudentVisual variant="side" compact />
@@ -414,33 +721,72 @@ function LoginPage({ setScreen, setRole, setIsAuthenticated }) {
 
 function Sidebar({ role, screen, setScreen, onLogout }) {
   const groups = role === 'admin' ? adminNav : [{ title: '', items: nav }];
+  const defaultOpenGroups = Object.fromEntries(groups.map((group) => [
+    group.title || 'main',
+    !group.title || group.items.some((item) => item.id === screen),
+  ]));
+  const [openGroups, setOpenGroups] = useState(defaultOpenGroups);
+
+  useEffect(() => {
+    setOpenGroups((current) => {
+      const next = { ...current };
+      groups.forEach((group) => {
+        const key = group.title || 'main';
+        if (!group.title || group.items.some((item) => item.id === screen)) next[key] = true;
+        if (!(key in next)) next[key] = !group.title;
+      });
+      return next;
+    });
+  }, [groups, screen]);
+
+  function toggleGroup(key) {
+    setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
+  }
+
   return (
     <aside className="sidebar">
       <Brand />
       <nav>
-        {groups.map((group) => (
-          <div className="nav-group" key={group.title || 'main'}>
-            {group.title && <span>{group.title}</span>}
-            {group.items.map((item) => {
-              const Icon = item.icon;
-              return <button type="button" key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}><Icon size={17} /> {item.label}</button>;
-            })}
+        {groups.map((group) => {
+          const key = group.title || 'main';
+          const isOpen = Boolean(openGroups[key]);
+          return (
+          <div className={`nav-group ${isOpen ? 'open' : ''}`} key={key}>
+            {group.title && (
+              <button type="button" className="nav-group-toggle" onClick={() => toggleGroup(key)}>
+                <span>{group.title}</span>
+                <ArrowRight size={14} />
+              </button>
+            )}
+            {isOpen && (
+              <div className="nav-group-items">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return <button type="button" key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}><Icon size={17} /> {item.label}</button>;
+                })}
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
       </nav>
       <button type="button" className="logout" onClick={onLogout}><LogOut size={17} /> Chiqish</button>
     </aside>
   );
 }
 
-function Topbar({ role, setRole, setScreen }) {
+function Topbar({ role, setRole, setScreen, studentProfile, currentUserEmail, messages }) {
+  const initial = studentProfile.fullName?.trim()?.[0]?.toUpperCase() || 'O';
+  const unreadCount = role === 'admin'
+    ? messages.filter((item) => item.to === 'admin' && !item.readByAdmin).length
+    : messages.filter((item) => item.to === currentUserEmail && !item.readByUser).length;
   return (
     <header className="topbar">
-      <div><b>{role === 'admin' ? 'Admin panel' : 'Salom, Sardor!'}</b><span>O'qishni boshlashga tayyor.</span></div>
+      <div><b>{role === 'admin' ? 'Admin panel' : `Salom, ${studentProfile.fullName}!`}</b><span>O'qishni boshlashga tayyor.</span></div>
       <div className="top-actions">
         <Search size={18} />
-        <button type="button" className="icon-btn" onClick={() => setScreen('notifications')}><Bell size={17} /></button>
-        <button className="avatar" onClick={() => { const next = role === 'admin' ? 'student' : 'admin'; setRole(next); setScreen(next === 'admin' ? 'admin' : 'dashboard'); }}>S</button>
+        <button type="button" className="icon-btn badge-button" onClick={() => setScreen('notifications')}><Bell size={17} />{unreadCount > 0 && <i>{unreadCount}</i>}</button>
+        <button className="avatar" onClick={() => { const next = role === 'admin' ? 'student' : 'admin'; setRole(next); setScreen(next === 'admin' ? 'admin' : 'dashboard'); }}>{initial}</button>
       </div>
     </header>
   );
@@ -449,30 +795,40 @@ function Topbar({ role, setRole, setScreen }) {
 function DashboardPage({ setScreen, setSelectedDirection, directionAccess, lessonAccess, directionLessons, completedDirections, directions }) {
   const openCount = directions.filter((item) => directionAccess[item.title]).length;
   const unlockedLessons = directions.reduce((total, item) => total + (directionAccess[item.title] ? getUnlockedLessonCount(lessonAccess, item.title, directionLessons[item.title] || []) : 0), 0);
+  const totalLessons = directions.reduce((total, item) => total + (directionLessons[item.title] || []).length, 0);
+  const progress = totalLessons ? Math.round((unlockedLessons / totalLessons) * 100) : 0;
+  const dynamicDirections = directions.map((item) => ({
+    ...item,
+    progress: getDirectionProgress(directionAccess, lessonAccess, completedDirections, item.title, directionLessons[item.title] || []),
+  }));
   return (
     <section className="panel">
       <div className="dashboard-head">
-        <div><h2>Umumiy progress</h2><div className="progress"><i style={{ width: '0%' }} /></div></div>
+        <div><h2>Umumiy progress</h2><div className="progress"><i style={{ width: `${progress}%` }} /></div></div>
         <Stat value={openCount} label="Ochiq yo'nalishlar" />
         <Stat value={unlockedLessons} label="Ochiq mavzular" />
         <Stat value={completedDirections.length} label="Tugallangan yo'nalishlar" />
       </div>
       <Title title="Yo'nalishlar" action={<button className="ghost small" onClick={() => setScreen('directions')}><Eye size={15} /> Barchasini ko'rish</button>} />
-      <DirectionGrid directions={directions} directionAccess={directionAccess} onOpen={(title) => { setSelectedDirection(title); setScreen('course'); }} />
+      <DirectionGrid directions={dynamicDirections} directionAccess={directionAccess} onOpen={(title) => { setSelectedDirection(title); setScreen('course'); }} />
     </section>
   );
 }
 
-function DirectionsPage({ setScreen, setSelectedDirection, directionAccess, directions }) {
+function DirectionsPage({ setScreen, setSelectedDirection, directionAccess, lessonAccess, directionLessons, completedDirections, directions }) {
+  const dynamicDirections = directions.map((item) => ({
+    ...item,
+    progress: getDirectionProgress(directionAccess, lessonAccess, completedDirections, item.title, directionLessons[item.title] || []),
+  }));
   return (
     <section className="panel">
       <Title title="Yo'nalishlar" subtitle="O'zingizga qiziq yo'nalishni tanlang va o'qishni boshlang." />
-      <DirectionGrid large directions={directions} directionAccess={directionAccess} onOpen={(title) => { setSelectedDirection(title); setScreen('course'); }} />
+      <DirectionGrid large directions={dynamicDirections} directionAccess={directionAccess} onOpen={(title) => { setSelectedDirection(title); setScreen('course'); }} />
     </section>
   );
 }
 
-function CoursesPage({ setScreen, setSelectedDirection, directionAccess, lessonAccess, directionLessons, directions }) {
+function CoursesPage({ setScreen, setSelectedDirection, directionAccess, lessonAccess, directionLessons, completedDirections, directions }) {
   return (
     <section className="panel">
       <Title title="Mening o'quvlarim" subtitle="Kurslar hali boshlanmagan. Birinchi darsdan boshlashingiz mumkin." />
@@ -482,13 +838,14 @@ function CoursesPage({ setScreen, setSelectedDirection, directionAccess, lessonA
           const open = Boolean(directionAccess[item.title]);
           const list = directionLessons[item.title] || [];
           const unlocked = getUnlockedLessonCount(lessonAccess, item.title, list);
+          const progress = getDirectionProgress(directionAccess, lessonAccess, completedDirections, item.title, list);
           return (
             <article key={item.title}>
               <Icon size={30} />
               <div>
                 <h3>{item.title}</h3>
                 <p>{open ? `Ochiq mavzu: ${unlocked}. ${list[unlocked - 1] || 'Mavzu kiritilmagan'}` : 'Oldingi yo\'nalish tugagach yoki admin ochgach ishlaydi'}</p>
-                <div className="progress"><i style={{ width: '0%' }} /></div>
+                <div className="progress"><i style={{ width: `${progress}%` }} /></div>
               </div>
               <button className={open ? 'primary small' : 'ghost small'} disabled={!open} onClick={() => { setSelectedDirection(item.title); setScreen('course'); }}><BookOpen size={15} /> {open ? 'Boshlash' : 'Yopiq'}</button>
             </article>
@@ -505,14 +862,15 @@ function DirectionGrid({ onOpen, large, directionAccess, directions }) {
       {directions.map((item) => {
         const Icon = item.icon;
         const isOpen = Boolean(directionAccess[item.title]);
+        const progress = Number(item.progress) || 0;
         return (
           <button className="direction-card" key={item.title} disabled={!isOpen} aria-disabled={!isOpen} onClick={() => isOpen && onOpen(item.title)}>
             <Icon size={42} style={{ color: item.color }} />
             {!isOpen && <Lock className="lock" size={22} />}
             <b>{item.title}</b>
             <small>{isOpen ? 'Ochiq' : 'Qulflangan'}</small>
-            <span className="progress"><i style={{ width: `${item.progress}%`, background: item.color }} /></span>
-            <em>{item.progress}%</em>
+            <span className="progress"><i style={{ width: `${progress}%`, background: item.color }} /></span>
+            <em>{progress}%</em>
           </button>
         );
       })}
@@ -524,6 +882,7 @@ function CoursePage({ selectedDirection, selectedLesson, setSelectedLesson, setS
   const isDirectionOpen = Boolean(directionAccess[selectedDirection]);
   const unlockedLessonCount = getUnlockedLessonCount(lessonAccess, selectedDirection, courseLessons);
   const isLessonOpen = selectedLesson < unlockedLessonCount;
+  const progress = courseLessons.length ? Math.round((unlockedLessonCount / courseLessons.length) * 100) : 0;
 
   useEffect(() => {
     if (unlockedLessonCount > 0 && selectedLesson >= unlockedLessonCount) setSelectedLesson(unlockedLessonCount - 1);
@@ -541,7 +900,7 @@ function CoursePage({ selectedDirection, selectedLesson, setSelectedLesson, setS
     <section className="panel course-view">
       <div className="course-side">
         <h2>{selectedDirection}</h2>
-        <div className="progress"><i style={{ width: '0%' }} /></div>
+        <div className="progress"><i style={{ width: `${progress}%` }} /></div>
         {courseLessons.map((lesson, index) => (
           <button key={lesson} disabled={index >= unlockedLessonCount} className={selectedLesson === index ? 'active' : ''} onClick={() => setSelectedLesson(index)}>
             {index + 1}. {lesson} {index >= unlockedLessonCount ? ' - yopiq' : ''}
@@ -732,15 +1091,27 @@ function TestPage({ setScreen, questions, selectedDirection, selectedLesson, cou
   );
 }
 
-function FinalTaskPage({ setScreen, selectedLesson, courseLessons, setResult }) {
+function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson, courseLessons, setResult }) {
   const lesson = getCurrentLesson(courseLessons, selectedLesson);
-  const [code, setCode] = useState('# Kodi shu yerga yozing\nism = input("Ism: ")\nyosh = input("Yosh: ")\nprint(ism, yosh)');
+  const finalTasks = getQuestions(questions, selectedDirection, lesson, 'final');
+  const task = finalTasks[0] || {
+    question: 'Oddiy kontakt daftar dasturini yozing. Foydalanuvchidan ism va yosh so\'rang, keyin natijani chiroyli ko\'rinishda chiqaring.',
+    code: '# Kodi shu yerga yozing\nism = input("Ism: ")\nyosh = input("Yosh: ")\nprint(ism, yosh)',
+    checkWords: ['input', 'print'],
+  };
+  const [code, setCode] = useState(task.code || '# Kodi shu yerga yozing');
   const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setCode(task.code || '# Kodi shu yerga yozing');
+    setMessage('');
+  }, [task.id, task.code]);
 
   function submit() {
     const normalized = code.toLowerCase();
-    const ok = ['input', 'print'].every((word) => normalized.includes(word));
-    setMessage(ok ? 'Yakuniy topshiriq qabul qilindi.' : 'Topshiriqda input va print ishlatilishi kerak.');
+    const checkWords = task.checkWords?.length ? task.checkWords : ['input', 'print'];
+    const ok = checkWords.every((word) => normalized.includes(String(word).toLowerCase()));
+    setMessage(ok ? 'Yakuniy topshiriq qabul qilindi.' : `Topshiriqda quyidagilar ishlatilishi kerak: ${checkWords.join(', ')}.`);
     setResult({ percent: ok ? 90 : 50, correct: ok ? 23 : 12, wrong: ok ? 2 : 13, score: ok ? 90 : 50 });
     if (ok) setScreen('exam');
   }
@@ -751,7 +1122,7 @@ function FinalTaskPage({ setScreen, selectedLesson, courseLessons, setResult }) 
       <p>4-qism: Yakuniy topshiriq</p>
       <StageTabs active="final" setScreen={setScreen} />
       <div className="practice-grid">
-        <div><h3>Loyiha topshirig'i</h3><p>Oddiy kontakt daftar dasturini yozing. Foydalanuvchidan ism va yosh so'rang, keyin natijani chiroyli ko'rinishda chiqaring.</p></div>
+        <div><h3>Loyiha topshirig'i</h3><p>{task.question}</p></div>
         <textarea className="code-editor" value={code} onChange={(event) => setCode(event.target.value)} />
       </div>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
@@ -838,8 +1209,12 @@ function ResultPage({ setScreen, selectedDirection, result }) {
   );
 }
 
-function downloadCertificate(direction) {
-  const html = `<!doctype html><html><head><meta charset="UTF-8"><title>Sertifikat</title><style>body{font-family:Arial,sans-serif;padding:48px;text-align:center;color:#132341}.certificate{border:8px double #d7b45c;min-height:420px;padding:60px}h1{font-size:42px}h2{font-size:34px;color:#0f2f65}.seal{width:74px;height:74px;margin:30px auto 0;display:grid;place-items:center;border:2px solid #1f4f91;border-radius:50%;font-weight:900}</style></head><body><section class="certificate"><h1>SERTIFIKAT</h1><p>Ushbu sertifikat</p><h2>Sardor Karimov</h2><p>${direction} yo'nalishini muvaffaqiyatli yakunlagani uchun berildi.</p><div class="seal">360</div></section></body></html>`;
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+}
+
+function downloadCertificate(direction, studentProfile) {
+  const html = `<!doctype html><html><head><meta charset="UTF-8"><title>Sertifikat</title><style>body{font-family:Arial,sans-serif;padding:48px;text-align:center;color:#132341}.certificate{border:8px double #d7b45c;min-height:420px;padding:60px}h1{font-size:42px}h2{font-size:34px;color:#0f2f65}.seal{width:74px;height:74px;margin:30px auto 0;display:grid;place-items:center;border:2px solid #1f4f91;border-radius:50%;font-weight:900}</style></head><body><section class="certificate"><h1>SERTIFIKAT</h1><p>Ushbu sertifikat</p><h2>${escapeHtml(studentProfile.fullName)}</h2><p>${escapeHtml(direction)} yo'nalishini muvaffaqiyatli yakunlagani uchun berildi.</p><div class="seal">360</div></section></body></html>`;
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -849,7 +1224,7 @@ function downloadCertificate(direction) {
   URL.revokeObjectURL(url);
 }
 
-function CertificatePage({ selectedDirection, result }) {
+function CertificatePage({ selectedDirection, result, studentProfile }) {
   if (!result?.passed) {
     return (
       <section className="panel">
@@ -863,38 +1238,170 @@ function CertificatePage({ selectedDirection, result }) {
       <div className="certificate">
         <h1>SERTIFIKAT</h1>
         <p>Ushbu sertifikat</p>
-        <h2>Sardor Karimov</h2>
+        <h2>{studentProfile.fullName}</h2>
         <p>{selectedDirection} yo'nalishini muvaffaqiyatli yakunlagani uchun berildi.</p>
         <div className="seal">360</div>
       </div>
       <div className="actions certificate-actions">
-        <button className="success-btn" onClick={() => downloadCertificate(selectedDirection)}><Download size={17} /> Yuklab olish</button>
+        <button className="success-btn" onClick={() => downloadCertificate(selectedDirection, studentProfile)}><Download size={17} /> Yuklab olish</button>
         <button className="ghost" onClick={() => window.print()}><Printer size={17} /> Chop etish</button>
       </div>
     </section>
   );
 }
 
-function ProfilePage() {
+function ProfilePage({ studentProfile, setStudentProfile }) {
+  function updateProfile(field, value) {
+    setStudentProfile((current) => ({ ...current, [field]: value }));
+  }
+
   return (
     <section className="panel profile-grid">
-      <div className="big-avatar">S</div>
-      <div><h2>Sardor Karimov</h2><p>em.sardor@gmail.com</p><p>O'quvchi</p></div>
-      <dl><dt>To'liq ism</dt><dd>Sardor Karimov</dd><dt>Telefon</dt><dd>+998 90 123 45 67</dd><dt>Tug'ilgan sana</dt><dd>15.01.2004</dd></dl>
+      <div className="big-avatar">{studentProfile.fullName?.trim()?.[0]?.toUpperCase() || 'O'}</div>
+      <div><h2>{studentProfile.fullName}</h2><p>{studentProfile.email}</p><p>{studentProfile.roleLabel}</p></div>
+      <div className="profile-form">
+        <label>To'liq ism<input value={studentProfile.fullName} onChange={(event) => updateProfile('fullName', event.target.value)} /></label>
+        <label>Email<input value={studentProfile.email} onChange={(event) => updateProfile('email', event.target.value)} /></label>
+        <label>Telefon<input value={studentProfile.phone} onChange={(event) => updateProfile('phone', event.target.value)} /></label>
+        <label>Tug'ilgan sana<input value={studentProfile.birthDate} onChange={(event) => updateProfile('birthDate', event.target.value)} /></label>
+      </div>
     </section>
   );
 }
 
-function NotificationsPage() {
+function renameUserKey(users, oldEmail, nextEmail, updates = {}) {
+  const normalizedOld = normalizeEmail(oldEmail);
+  const normalizedNext = normalizeEmail(nextEmail);
+  const user = users[normalizedOld];
+  if (!user || !normalizedNext) return users;
+  const { [normalizedOld]: _removed, ...rest } = users;
+  return {
+    ...rest,
+    [normalizedNext]: {
+      ...user,
+      ...updates,
+      email: normalizedNext,
+      profile: { ...user.profile, ...updates.profile, email: normalizedNext },
+    },
+  };
+}
+
+function updateMessageUser(messages, oldEmail, nextEmail) {
+  const normalizedOld = normalizeEmail(oldEmail);
+  const normalizedNext = normalizeEmail(nextEmail);
+  return messages.map((item) => ({
+    ...item,
+    from: item.from === normalizedOld ? normalizedNext : item.from,
+    to: item.to === normalizedOld ? normalizedNext : item.to,
+  }));
+}
+
+function getUnreadForUser(messages, userEmail) {
+  return messages.filter((item) => item.from === userEmail && item.to === 'admin' && !item.readByAdmin).length;
+}
+
+function NotificationsPage({ role, currentUserEmail, users, messages, setMessages }) {
+  const userList = Object.values(users);
+  const [selectedEmail, setSelectedEmail] = useState(role === 'admin' ? '' : currentUserEmail || userList[0]?.email || '');
+  const [text, setText] = useState('');
+  const isAdmin = role === 'admin';
+  const activeEmail = isAdmin ? selectedEmail : currentUserEmail;
+  const activeUser = users[activeEmail];
+  const conversation = messages
+    .filter((item) => (item.from === activeEmail && item.to === 'admin') || (item.from === 'admin' && item.to === activeEmail))
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (selectedEmail && !users[selectedEmail]) setSelectedEmail('');
+  }, [isAdmin, selectedEmail, users]);
+
+  useEffect(() => {
+    if (!activeEmail) return;
+    if (isAdmin) {
+      setMessages((current) => current.map((item) => (
+        item.from === activeEmail && item.to === 'admin' ? { ...item, readByAdmin: true } : item
+      )));
+      return;
+    }
+    setMessages((current) => current.map((item) => (
+      item.from === 'admin' && item.to === activeEmail ? { ...item, readByUser: true } : item
+    )));
+  }, [activeEmail, isAdmin, setMessages]);
+
+  function sendMessage() {
+    const body = text.trim();
+    if (!body || !activeEmail) return;
+    setMessages((current) => [
+      ...current,
+      {
+        id: createId(),
+        from: isAdmin ? 'admin' : activeEmail,
+        to: isAdmin ? activeEmail : 'admin',
+        text: body,
+        readByAdmin: isAdmin,
+        readByUser: !isAdmin,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    setText('');
+  }
+
   return (
-    <section className="panel">
-      <Title title="Xabarnomalar" />
-      <div className="notification"><Bell size={18} /><span>Hozircha yangi xabarnoma yo'q.</span><small>Boshlang'ich holat</small></div>
+    <section className="panel messages-page">
+      <Title title={isAdmin ? 'User xabarlari' : 'Adminga xabar'} subtitle={isAdmin ? 'Userni tanlang va javob yozing.' : 'Savolingizni adminga yuboring.'} />
+      <div className={`messages-layout ${isAdmin ? '' : 'single'}`}>
+        {isAdmin && (
+          <aside className="message-users">
+            {userList.map((user) => {
+              const unread = getUnreadForUser(messages, user.email);
+              return (
+                <button key={user.email} className={selectedEmail === user.email ? 'active' : ''} onClick={() => setSelectedEmail(user.email)}>
+                  <span>{user.profile?.fullName || user.email}</span>
+                  <small>{user.email}</small>
+                  {unread > 0 && <b>{unread}</b>}
+                </button>
+              );
+            })}
+          </aside>
+        )}
+        {(!isAdmin || selectedEmail) ? <div className="message-thread">
+          <div className="message-thread-head">
+            <div className="mini-avatar">{isAdmin ? (activeUser?.profile?.fullName?.[0] || 'U') : 'A'}</div>
+            <div>
+              <h3>{isAdmin ? activeUser?.profile?.fullName || 'User tanlanmagan' : 'Admin bilan suhbat'}</h3>
+              <small>{isAdmin ? activeUser?.email : 'Savollaringizga admin javob beradi'}</small>
+            </div>
+          </div>
+          <div className="message-list">
+            {conversation.length ? conversation.map((item) => (
+              <article key={item.id} className={item.from === 'admin' ? 'admin-message' : 'user-message'}>
+                <b>{item.from === 'admin' ? 'Admin' : users[item.from]?.profile?.fullName || item.from}</b>
+                <p>{item.text}</p>
+                <small>{new Date(item.createdAt).toLocaleString()}</small>
+              </article>
+            )) : (
+              <div className="notification"><Bell size={18} /><span>Hozircha xabar yo'q.</span><small>Suhbat boshlanmagan</small></div>
+            )}
+          </div>
+          <div className="message-compose">
+            <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder={isAdmin ? 'Userga javob yozing...' : 'Adminga xabar yozing...'} />
+            <button className="primary" onClick={sendMessage}><Save size={18} /> Yuborish</button>
+          </div>
+        </div> : (
+          <div className="message-empty-state">
+            <Bell size={34} />
+            <h3>Userni tanlang</h3>
+            <p>Chapdagi ro'yxatdan user ustiga bosing. Shundan keyin yozish paneli ochiladi.</p>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
 
-function AdminDashboard({ questions, directionAccess, lessonAccess, directionLessons, completedDirections, directions, setScreen }) {
+function AdminDashboard({ questions, directionAccess, lessonAccess, directionLessons, completedDirections, directions, setScreen, databaseStatus, saveStatus, studentProfile, users }) {
+  const userList = Object.values(users);
   const openDirections = directions.filter((item) => directionAccess[item.title]).length;
   const currentDirection = directions.find((item) => directionAccess[item.title] && !completedDirections.includes(item.title))?.title || directions[0].title;
   const courseLessons = directionLessons[currentDirection] || [];
@@ -904,10 +1411,18 @@ function AdminDashboard({ questions, directionAccess, lessonAccess, directionLes
   return (
     <section className="panel admin-home">
       <Title title="Boshqaruv paneli" subtitle="Avval yo'nalish qo'shing, keyin mavzu, dars, test va ruxsatlarni shu tartibda boshqaring." />
+      <div className={`notice db-status ${databaseStatus === 'connected' ? 'connected' : ''}`}>
+        <CheckCircle2 size={18} />
+        {databaseStatus === 'connected'
+          ? `PostgreSQL bazaga ulangan. ${saveStatus === 'saving' ? 'Saqlanmoqda...' : 'Oxirgi oʼzgarish saqlandi.'}`
+          : databaseStatus === 'checking'
+            ? 'Baza aloqasi tekshirilmoqda.'
+            : 'Backend yoki PostgreSQL ulanmagan. Oʼzgarishlar lokal saqlanadi va backend qaytsa DBga yuboriladi.'}
+      </div>
       <div className="admin-stats">
         <Stat value={directions.length} label="Jami yo'nalishlar" />
+        <Stat value={userList.length} label="Jami userlar" />
         <Stat value={openDirections} label="Ochiq yo'nalishlar" />
-        <Stat value={totalLessons} label="Jami mavzular" />
         <Stat value={questions.length} label="Test va nazoratlar" />
       </div>
 
@@ -922,36 +1437,170 @@ function AdminDashboard({ questions, directionAccess, lessonAccess, directionLes
         </div>
 
         <div className="student-track">
-          <h3>O'quvchi nazorati</h3>
-          <p><span className="mini-avatar">S</span>Sardor Karimov</p>
+          <h3>Joriy o'quvchi</h3>
+          <p><span className="mini-avatar">{studentProfile.fullName?.trim()?.[0]?.toUpperCase() || 'O'}</span>{studentProfile.fullName}</p>
           <small>Joriy yo'nalish: {currentDirection}</small>
           <small>Ochiq mavzu: {currentLessonCount}. {courseLessons[currentLessonCount - 1] || 'Mavzu kiritilmagan'}</small>
           <small>Tugagan yo'nalishlar: {completedDirections.length}</small>
           <button className="ghost small" onClick={() => setScreen('admin-access')}><ShieldCheck size={15} /> Ruxsatlarni boshqarish</button>
+          <button className="ghost small" onClick={() => setScreen('admin-users')}><Users size={15} /> Userlarni boshqarish</button>
+          <div className="mini-user-list">
+            {userList.map((user) => (
+              <span key={user.email}>{user.profile?.fullName || user.email}</span>
+            ))}
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-function AdminAccess({ directionAccess, setDirectionAccess, lessonAccess, setLessonAccess, directionLessons, completedDirections, directions }) {
+function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, setCurrentUserEmail, setStudentProfile }) {
+  const userList = Object.values(users);
+  const [selectedEmail, setSelectedEmail] = useState(userList[0]?.email || '');
+  const selectedUser = users[selectedEmail] || userList[0];
+  const [form, setForm] = useState({
+    fullName: selectedUser?.profile?.fullName || '',
+    email: selectedUser?.email || '',
+    password: selectedUser?.password || '',
+    phone: selectedUser?.profile?.phone || '',
+    birthDate: selectedUser?.profile?.birthDate || '',
+  });
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    const user = users[selectedEmail] || Object.values(users)[0];
+    if (!user) return;
+    if (!users[selectedEmail]) setSelectedEmail(user.email);
+    setForm({
+      fullName: user.profile?.fullName || '',
+      email: user.email || '',
+      password: user.password || '',
+      phone: user.profile?.phone || '',
+      birthDate: user.profile?.birthDate || '',
+    });
+  }, [selectedEmail, users]);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function saveUser() {
+    const nextEmail = normalizeEmail(form.email);
+    if (!selectedUser || !nextEmail || !form.password.trim() || !form.fullName.trim()) {
+      setMessage("Ism, login/email va parol bo'sh bo'lmasin.");
+      return;
+    }
+    if (nextEmail !== selectedEmail && users[nextEmail]) {
+      setMessage('Bu login/email boshqa userda bor.');
+      return;
+    }
+
+    const updates = {
+      password: form.password,
+      profile: {
+        ...selectedUser.profile,
+        fullName: form.fullName.trim(),
+        phone: form.phone.trim(),
+        birthDate: form.birthDate.trim(),
+      },
+    };
+
+    setUsers((current) => renameUserKey(current, selectedEmail, nextEmail, updates));
+    setMessages(updateMessageUser(messages, selectedEmail, nextEmail));
+    if (currentUserEmail === selectedEmail) {
+      setCurrentUserEmail(nextEmail);
+      setStudentProfile((current) => ({ ...current, ...updates.profile, email: nextEmail }));
+    }
+    setSelectedEmail(nextEmail);
+    setMessage('User maʼlumotlari saqlandi.');
+  }
+
+  return (
+    <section className="panel form-panel">
+      <Title title="Userlarni boshqarish" subtitle="Admin user login, parol va profil maʼlumotlarini koʼradi hamda oʼzgartiradi." />
+      <div className="access-grid">
+        <div className="user-admin-list">
+          {userList.map((user) => (
+            <button key={user.email} className={selectedEmail === user.email ? 'active' : ''} onClick={() => setSelectedEmail(user.email)}>
+              <b>{user.profile?.fullName || user.email}</b>
+              <small>{user.email}</small>
+              <span>Parol: {user.password}</span>
+            </button>
+          ))}
+        </div>
+        <div>
+          <label>To'liq ism<input value={form.fullName} onChange={(event) => updateField('fullName', event.target.value)} /></label>
+          <label>Login / Email<input value={form.email} onChange={(event) => updateField('email', event.target.value)} /></label>
+          <label>Parol<input value={form.password} onChange={(event) => updateField('password', event.target.value)} /></label>
+          <label>Telefon<input value={form.phone} onChange={(event) => updateField('phone', event.target.value)} /></label>
+          <label>Tug'ilgan sana<input value={form.birthDate} onChange={(event) => updateField('birthDate', event.target.value)} /></label>
+          {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
+          <button className="primary" onClick={saveUser}><Save size={18} /> Saqlash</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AdminAccess({ directionLessons, directions, users, setUsers, currentUserEmail, setDirectionAccess, setLessonAccess, setCompletedDirections }) {
+  const userList = Object.values(users);
+  const [selectedEmail, setSelectedEmail] = useState(userList[0]?.email || '');
   const [direction, setDirection] = useState(directions[0].title);
+  const selectedUser = users[selectedEmail] || userList[0];
+  const userDirectionAccess = selectedUser?.directionAccess || initialDirectionAccess;
+  const userLessonAccess = selectedUser?.lessonAccess || initialLessonAccess;
+  const userCompletedDirections = selectedUser?.completedDirections || [];
   const courseLessons = directionLessons[direction] || [];
   const selectedDirectionIndex = directions.findIndex((item) => item.title === direction);
   const isFirstDirection = selectedDirectionIndex === 0;
-  const isOpen = Boolean(directionAccess[direction]);
-  const unlockedLessonCount = getUnlockedLessonCount(lessonAccess, direction, courseLessons);
+  const isOpen = Boolean(userDirectionAccess[direction]);
+  const unlockedLessonCount = getUnlockedLessonCount(userLessonAccess, direction, courseLessons);
   const nextDirection = getNextDirection(directions, direction);
+
+  useEffect(() => {
+    if (!users[selectedEmail] && userList[0]?.email) setSelectedEmail(userList[0].email);
+  }, [selectedEmail, userList, users]);
+
+  function updateSelectedUser(updater) {
+    if (!selectedUser) return;
+    setUsers((current) => {
+      const currentUser = current[selectedEmail];
+      const nextUser = updater(currentUser);
+      return { ...current, [selectedEmail]: nextUser };
+    });
+  }
+
+  function syncCurrentUser(nextUser) {
+    if (selectedEmail !== currentUserEmail) return;
+    setDirectionAccess(nextUser.directionAccess || initialDirectionAccess);
+    setLessonAccess(nextUser.lessonAccess || initialLessonAccess);
+    setCompletedDirections(nextUser.completedDirections || []);
+  }
 
   function toggleDirection() {
     if (isFirstDirection && isOpen) return;
-    setDirectionAccess((current) => ({ ...current, [direction]: !isOpen }));
-    setLessonAccess((current) => ({ ...current, [direction]: current[direction] || 1 }));
+    updateSelectedUser((user) => {
+      const nextUser = {
+        ...user,
+        directionAccess: { ...(user.directionAccess || initialDirectionAccess), [direction]: !isOpen },
+        lessonAccess: { ...(user.lessonAccess || initialLessonAccess), [direction]: user.lessonAccess?.[direction] || 1 },
+      };
+      syncCurrentUser(nextUser);
+      return nextUser;
+    });
   }
 
   function setOpenLessons(count) {
-    setLessonAccess((current) => ({ ...current, [direction]: clampLessonCount(count, courseLessons) }));
-    setDirectionAccess((current) => ({ ...current, [direction]: true }));
+    updateSelectedUser((user) => {
+      const nextUser = {
+        ...user,
+        lessonAccess: { ...(user.lessonAccess || initialLessonAccess), [direction]: clampLessonCount(count, courseLessons) },
+        directionAccess: { ...(user.directionAccess || initialDirectionAccess), [direction]: true },
+      };
+      syncCurrentUser(nextUser);
+      return nextUser;
+    });
   }
 
   return (
@@ -959,12 +1608,12 @@ function AdminAccess({ directionAccess, setDirectionAccess, lessonAccess, setLes
       <Title title="Ruxsatlarni boshqarish" subtitle="Admin o'quvchiga yo'nalish va mavzularni qo'lda ochib beradi. Yo'nalish tugasa keyingisi avtomatik ochiladi." />
       <div className="access-grid">
         <div>
-          <label>O'quvchi<select><option>Sardor Karimov</option></select></label>
+          <label>O'quvchi<select value={selectedEmail} onChange={(event) => setSelectedEmail(event.target.value)}>{userList.map((user) => <option key={user.email} value={user.email}>{user.profile?.fullName || user.email}</option>)}</select></label>
           <label>Yo'nalish<select value={direction} onChange={(event) => setDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
           <div className="access-summary">
             <span className={`status-pill ${isOpen ? 'open' : ''}`}>{isOpen ? 'Ochiq' : 'Yopiq'}</span>
             <b>Ochiq mavzu: {unlockedLessonCount}. {courseLessons[unlockedLessonCount - 1]}</b>
-            <small>{completedDirections.includes(direction) ? 'Bu yo\'nalish yakunlangan.' : nextDirection ? `Yakunlansa keyingi yo'nalish ochiladi: ${nextDirection}` : 'Bu oxirgi yo\'nalish.'}</small>
+            <small>{userCompletedDirections.includes(direction) ? 'Bu yo\'nalish yakunlangan.' : nextDirection ? `Yakunlansa keyingi yo'nalish ochiladi: ${nextDirection}` : 'Bu oxirgi yo\'nalish.'}</small>
           </div>
           <button className={isOpen ? 'ghost' : 'primary'} disabled={isFirstDirection && isOpen} onClick={toggleDirection}>
             {isOpen ? <Lock size={18} /> : <ShieldCheck size={18} />} {isOpen ? 'Yo\'nalishni yopish' : 'Yo\'nalishni ochish'}
@@ -988,7 +1637,7 @@ function AdminAccess({ directionAccess, setDirectionAccess, lessonAccess, setLes
   );
 }
 
-function AdminDirections({ directions, setDirections, setDirectionAccess, setLessonAccess, setDirectionLessons, setSelectedDirection }) {
+function AdminDirections({ directions, setDirections, setDirectionAccess, setLessonAccess, setDirectionLessons, setSelectedDirection, setUsers }) {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
 
@@ -1008,6 +1657,14 @@ function AdminDirections({ directions, setDirections, setDirectionAccess, setLes
     setDirections((current) => [...current, nextDirection]);
     setDirectionAccess((current) => ({ ...current, [title]: false }));
     setLessonAccess((current) => ({ ...current, [title]: 1 }));
+    setUsers((current) => Object.fromEntries(Object.entries(current).map(([email, user]) => [
+      email,
+      {
+        ...user,
+        directionAccess: { ...(user.directionAccess || initialDirectionAccess), [title]: false },
+        lessonAccess: { ...(user.lessonAccess || initialLessonAccess), [title]: 1 },
+      },
+    ])));
     setDirectionLessons((current) => ({ ...current, [title]: ['Kirish darsi'] }));
     setSelectedDirection(title);
     setName('');
@@ -1076,7 +1733,7 @@ function AdminQuestions({ questions, setQuestions, directions, directionLessons 
     setCorrect('1');
     setCode('# Kodi shu yerga yozing');
     setCheckWords('');
-    setMessage(`${section === 'exam' ? 'Yakuniy nazorat' : section === 'practice' ? 'Kodli topshiriq' : 'Test'} qo'shildi.`);
+    setMessage(`${section === 'exam' ? 'Yakuniy nazorat' : section === 'practice' ? 'Kodli topshiriq' : section === 'final' ? 'Yakuniy topshiriq' : 'Test'} qo'shildi.`);
   }
 
   async function importExcel(event) {
@@ -1108,7 +1765,7 @@ function AdminQuestions({ questions, setQuestions, directions, directionLessons 
       <div className="content-form-grid">
         <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
         <label>Mavzu<select value={topic} onChange={(event) => setTopic(event.target.value)}>{(directionLessons[direction] || []).map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
-        <label>Nazorat turi<select value={section} onChange={(event) => setSection(event.target.value)}><option value="test">Test</option><option value="practice">Kodli topshiriq</option><option value="exam">Yakuniy nazorat</option></select></label>
+        <label>Nazorat turi<select value={section} onChange={(event) => setSection(event.target.value)}><option value="test">Test</option><option value="practice">Kodli topshiriq</option><option value="final">Yakuniy topshiriq</option><option value="exam">Yakuniy nazorat</option></select></label>
       </div>
       <label>Admin sharti / savol matni<textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Masalan: name o'zgaruvchisini yarating va ekranga chiqaring." /></label>
       {(section === 'test' || section === 'exam') && (
