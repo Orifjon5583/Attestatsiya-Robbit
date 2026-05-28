@@ -100,13 +100,30 @@ function writeStored(key, value) {
   }
 }
 
+function readCookie(name) {
+  return document.cookie
+    .split('; ')
+    .find((row) => row.startsWith(`${name}=`))
+    ?.split('=')
+    .slice(1)
+    .join('=');
+}
+
 async function apiRequest(path, options = {}) {
+  const method = options.method || 'GET';
+  const csrfToken = readCookie('attestatsiya_csrf');
   const response = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(method !== 'GET' && csrfToken ? { 'X-CSRF-Token': decodeURIComponent(csrfToken) } : {}),
+      ...options.headers,
+    },
     ...options,
   });
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
-  return response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || `API error: ${response.status}`);
+  return payload;
 }
 
 function serializeDirections(directionList) {
@@ -123,12 +140,43 @@ function hydrateDirections(directionList) {
   }));
 }
 
+function getYouTubeEmbedUrl(url) {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  if (match && match[2].length === 11) {
+    return `https://www.youtube.com/embed/${match[2]}`;
+  }
+  return null;
+}
+
+function getDefaultCodeSnippet(direction, lesson) {
+  const dir = String(direction || '').toLowerCase();
+  if (dir.includes('python')) {
+    return `# Python-da o'zgaruvchilar va chiqish\nname = "Sardor"\nage = 20\nprint(f"Ism: {name}, Yosh: {age}")\n\n# Ro'yxat bilan ishlash\nsonlar = [1, 2, 3, 4, 5]\nkvadratlar = [x**2 for x in sonlar]\nprint("Kvadratlar:", kvadratlar)`;
+  }
+  if (dir.includes('arduino') || dir.includes('esp32')) {
+    return `// Arduino / ESP32 platasi uchun kod\nconst int LED_PIN = 13;\n\nvoid setup() {\n  // Raqamli pinni chiqish rejimiga o'tkazish\n  pinMode(LED_PIN, OUTPUT);\n  Serial.begin(9600);\n}\n\nvoid loop() {\n  digitalWrite(LED_PIN, HIGH); // LEDni yoqish\n  delay(1000);\n  digitalWrite(LED_PIN, LOW);  // LEDni o'chirish\n  delay(1000);\n  Serial.println("LED miltillamoqda...");\n}`;
+  }
+  if (dir.includes('web') || dir.includes('html') || dir.includes('javascript')) {
+    return `<!-- HTML5 va oddiy JavaScript namuna -->\n<!DOCTYPE html>\n<html>\n<head>\n  <title>Mening sahifam</title>\n  <style>\n    body { font-family: sans-serif; background: #f0f0f0; text-align: center; }\n    h1 { color: #333; }\n  </style>\n</head>\n<body>\n  <h1 id="title">Salom, Dunyo!</h1>\n  <button onclick="changeTitle()">Rangni o'zgartirish</button>\n\n  <script>\n    function changeTitle() {\n      const t = document.getElementById('title');\n      t.style.color = t.style.color === 'red' ? '#333' : 'red';\n    }\n  </script>\n</body>\n</html>`;
+  }
+  if (dir.includes('blynk') || dir.includes('iot')) {
+    return `// IoT Blynk loyihasi uchun kod\n#define BLYNK_TEMPLATE_ID "TMPLxxxxxx"\n#define BLYNK_TEMPLATE_NAME "Device"\n\n#include <WiFi.h>\n#include <BlynkSimpleEsp32.h>\n\nchar auth[] = "Sening_Blynk_Tokening";\nchar ssid[] = "Sening_WiFi_Noming";\nchar pass[] = "Sening_WiFi_Paroling";\n\nvoid setup() {\n  Blynk.begin(auth, ssid, pass);\n}\n\nvoid loop() {\n  Blynk.run();\n}`;
+  }
+  return `// ${direction} - ${lesson} bo'yicha boshlang'ich kod namunasi\n// Nazariya va amaliy topshiriqlarni boshlang...`;
+}
+
+
 function createAppStateSnapshot({ managedDirections, directionLessons, lessonContents, users, questions, messages }) {
   return {
     directions: serializeDirections(managedDirections),
     directionLessons,
     lessonContents,
-    users,
+    users: Object.fromEntries(Object.entries(users || {}).map(([email, user]) => {
+      const { password, passwordHash, ...safeUser } = user || {};
+      return [email, safeUser];
+    })),
     questions,
     messages,
   };
@@ -242,11 +290,11 @@ function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function createStudentUser({ fullName, email, password }) {
+function createStudentUser({ fullName, email }) {
   const normalizedEmail = normalizeEmail(email);
   return {
     email: normalizedEmail,
-    password,
+    role: 'student',
     profile: {
       ...initialStudentProfile,
       fullName: fullName?.trim() || initialStudentProfile.fullName,
@@ -264,7 +312,6 @@ const initialUsers = {
   [defaultStudentEmail]: createStudentUser({
     fullName: initialStudentProfile.fullName,
     email: defaultStudentEmail,
-    password: '123456',
   }),
 };
 
@@ -290,6 +337,86 @@ const starterQuestions = [
     points: 8,
   },
   {
+    id: 'q2b',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'practice',
+    question: 'city o\'zgaruvchisini yarating va qiymatini ekranga chiqaring.',
+    code: '# Kodi shu yerga yozing\ncity = "Toshkent"\nprint(city)',
+    checkWords: ['city', 'print'],
+    points: 8,
+  },
+  {
+    id: 'q2c',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'practice',
+    question: 'a va b sonlarini yarating, ularning yig\'indisini result o\'zgaruvchisiga yozing.',
+    code: '# Kodi shu yerga yozing\na = 7\nb = 5\nresult = a + b\nprint(result)',
+    checkWords: ['a', 'b', 'result', 'print'],
+    points: 8,
+  },
+  {
+    id: 'q2d',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'practice',
+    question: 'first_name va last_name o\'zgaruvchilarini birlashtirib full_name chiqaring.',
+    code: '# Kodi shu yerga yozing\nfirst_name = "Ali"\nlast_name = "Valiyev"\nfull_name = first_name + " " + last_name\nprint(full_name)',
+    checkWords: ['first_name', 'last_name', 'full_name', 'print'],
+    points: 8,
+  },
+  {
+    id: 'q2e',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'practice',
+    question: 'price va count o\'zgaruvchilari orqali total narxni hisoblang.',
+    code: '# Kodi shu yerga yozing\nprice = 12000\ncount = 3\ntotal = price * count\nprint(total)',
+    checkWords: ['price', 'count', 'total', 'print'],
+    points: 8,
+  },
+  {
+    id: 'q1b',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'test',
+    question: 'Python\'da qiymat berish operatori qaysi?',
+    answers: ['==', '=', '=>', ':='],
+    correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q1c',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'test',
+    question: 'Quyidagilardan qaysi biri to\'g\'ri o\'zgaruvchi nomi?',
+    answers: ['2name', 'full_name', 'full-name', 'class'],
+    correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q1d',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'test',
+    question: 'print() funksiyasi nima qiladi?',
+    answers: ['Kodga izoh yozadi', 'Ma\'lumotni ekranga chiqaradi', 'Faylni o\'chiradi', 'O\'zgaruvchini yashiradi'],
+    correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q1e',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'test',
+    question: 'Matn qiymati odatda qanday yoziladi?',
+    answers: ['Qo\'shtirnoq ichida', 'Faqat raqam bilan', '# belgisi bilan', 'Qavs tashqarisida'],
+    correct: 0,
+    points: 4,
+  },
+  {
     id: 'q3',
     direction: 'Python Dasturlash',
     topic: 'Variables (O\'zgaruvchilar)',
@@ -297,6 +424,36 @@ const starterQuestions = [
     question: 'O\'zgaruvchi yaratish uchun qaysi yozuv to\'g\'ri?',
     answers: ['let name = Ali', 'name = "Ali"', 'var name: Ali', 'create name Ali'],
     correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q3b',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'exam',
+    question: 'name = "Ali" kodida name nima?',
+    answers: ['Funksiya', 'O\'zgaruvchi nomi', 'Operator', 'Izoh'],
+    correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q3c',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'exam',
+    question: 'Quyidagi kod natijasi nima: x = 2; y = 3; print(x + y)',
+    answers: ['23', '5', 'x + y', 'Error'],
+    correct: 1,
+    points: 4,
+  },
+  {
+    id: 'q3d',
+    direction: 'Python Dasturlash',
+    topic: 'Variables (O\'zgaruvchilar)',
+    section: 'exam',
+    question: 'Python\'da izoh qaysi belgi bilan boshlanadi?',
+    answers: ['#', '//', '<!--', '**'],
+    correct: 0,
     points: 4,
   },
 ];
@@ -324,7 +481,10 @@ const adminNav = [
       { id: 'admin-directions', label: "Yo'nalish qo'shish", icon: Rocket },
       { id: 'admin-topic', label: 'Mavzu qo\'shish', icon: Plus },
       { id: 'admin-lesson', label: 'Dars qo\'shish', icon: BookOpen },
-      { id: 'admin-questions', label: 'Test va nazoratlar', icon: FileQuestion },
+      { id: 'admin-theory-questions', label: 'Nazariy savol-javob', icon: ClipboardCheck },
+      { id: 'admin-test-questions', label: 'Test qo\'shish', icon: FileQuestion },
+      { id: 'admin-code-tasks', label: 'Kod yozish qismi', icon: Code2 },
+      { id: 'admin-final-tasks', label: 'Yakuniy quiz va dastur', icon: Award },
     ],
   },
   {
@@ -364,12 +524,21 @@ function getNextDirection(directionList, title) {
   return list[index + 1]?.title || null;
 }
 
+function unlockNextLesson(setLessonAccess, direction, selectedLesson, courseLessons) {
+  if (!courseLessons.length || selectedLesson >= courseLessons.length - 1) return false;
+  const nextLessonCount = selectedLesson + 2;
+  setLessonAccess((current) => ({
+    ...current,
+    [direction]: Math.max(current[direction] || 1, nextLessonCount),
+  }));
+  return true;
+}
+
 function App() {
-  const savedSession = readStored('attestatsiya.session', null);
-  const [screen, setScreen] = useState(savedSession?.authenticated ? (savedSession.role === 'admin' ? 'admin' : 'dashboard') : 'home');
-  const [role, setRole] = useState(savedSession?.role || 'student');
-  const [isAuthenticated, setIsAuthenticated] = useState(Boolean(savedSession?.authenticated));
-  const [currentUserEmail, setCurrentUserEmail] = useState(normalizeEmail(savedSession?.email || defaultStudentEmail));
+  const [screen, setScreen] = useState('home');
+  const [role, setRole] = useState('student');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState(defaultStudentEmail);
   const [databaseStatus, setDatabaseStatus] = useState('checking');
   const [saveStatus, setSaveStatus] = useState('idle');
   const [appStateLoaded, setAppStateLoaded] = useState(false);
@@ -395,11 +564,6 @@ function App() {
   useEffect(() => {
     writeStored('attestatsiya.questions', questions);
   }, [questions]);
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    writeStored('attestatsiya.session', { authenticated: true, role, email: currentUserEmail });
-  }, [currentUserEmail, isAuthenticated, role]);
 
   function applyUserState(user) {
     if (!user) return;
@@ -439,6 +603,11 @@ function App() {
     let active = true;
 
     async function loadAppState() {
+      if (!isAuthenticated) {
+        setAppStateLoaded(true);
+        return;
+      }
+      setAppStateLoaded(false);
       const localState = readStored(APP_STATE_STORAGE_KEY, null);
       if (localState) applyAppState(localState);
 
@@ -465,10 +634,30 @@ function App() {
     return () => {
       active = false;
     };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    let active = true;
+    apiRequest('/auth/session')
+      .then(({ user }) => {
+        if (!active || !user?.email) return;
+        const userRole = user.role === 'admin' ? 'admin' : 'student';
+        setAppStateLoaded(false);
+        setRole(userRole);
+        setCurrentUserEmail(normalizeEmail(user.email));
+        setIsAuthenticated(true);
+        setScreen(userRole === 'admin' ? 'admin' : 'dashboard');
+      })
+      .catch(() => {
+        if (active) setIsAuthenticated(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!appStateLoaded) return;
+    if (!appStateLoaded || !isAuthenticated) return;
     const snapshot = createAppStateSnapshot({ managedDirections, directionLessons, lessonContents, users, questions, messages });
     writeStored(APP_STATE_STORAGE_KEY, snapshot);
     setSaveStatus('saving');
@@ -538,49 +727,61 @@ function App() {
   }
 
   function authenticateStudent(email, password) {
-    const normalizedEmail = normalizeEmail(email);
-    const user = users[normalizedEmail];
-    if (!user || user.password !== password) return false;
-    setRole('student');
-    setCurrentUserEmail(normalizedEmail);
-    applyUserState(user);
-    setIsAuthenticated(true);
-    setScreen('dashboard');
-    writeStored('attestatsiya.session', { authenticated: true, role: 'student', email: normalizedEmail });
-    return true;
+    return apiRequest('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }).then(({ user }) => {
+      const normalizedEmail = normalizeEmail(user.email);
+      setAppStateLoaded(false);
+      setRole('student');
+      setCurrentUserEmail(normalizedEmail);
+      applyUserState(users[normalizedEmail] || user);
+      setIsAuthenticated(true);
+      setScreen('dashboard');
+      return { ok: true };
+    }).catch((error) => ({ ok: false, message: error.message }));
   }
 
   function registerStudent({ fullName, email, password }) {
     const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail || !password || !fullName.trim()) return { ok: false, message: "Ism, email va parolni to'ldiring." };
-    if (users[normalizedEmail]) return { ok: false, message: 'Bu email bilan hisob allaqachon mavjud.' };
+    if (!normalizedEmail || !password || !fullName.trim()) return Promise.resolve({ ok: false, message: "Ism, email va parolni to'ldiring." });
+    if (password.length < 8) return Promise.resolve({ ok: false, message: 'Parol kamida 8 belgidan iborat bo‘lsin.' });
 
-    const user = createStudentUser({ fullName, email: normalizedEmail, password });
-    setUsers((current) => ({ ...current, [normalizedEmail]: user }));
-    setRole('student');
-    setCurrentUserEmail(normalizedEmail);
-    applyUserState(user);
-    setIsAuthenticated(true);
-    setScreen('dashboard');
-    writeStored('attestatsiya.session', { authenticated: true, role: 'student', email: normalizedEmail });
-    return { ok: true };
+    return apiRequest('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ fullName, email: normalizedEmail, password }),
+    }).then(({ user }) => {
+      setAppStateLoaded(false);
+      setUsers((current) => ({ ...current, [normalizedEmail]: user }));
+      setRole('student');
+      setCurrentUserEmail(normalizedEmail);
+      applyUserState(user);
+      setIsAuthenticated(true);
+      setScreen('dashboard');
+      return { ok: true };
+    }).catch((error) => ({ ok: false, message: error.message }));
   }
 
-  function loginAdmin() {
-    const firstUser = users[currentUserEmail] || Object.values(users)[0] || initialUsers[defaultStudentEmail];
-    setRole('admin');
-    setCurrentUserEmail(firstUser.email);
-    applyUserState(firstUser);
-    setIsAuthenticated(true);
-    setScreen('admin');
-    writeStored('attestatsiya.session', { authenticated: true, role: 'admin', email: firstUser.email });
+  function loginAdmin(email, password) {
+    return apiRequest('/auth/admin-login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }).then(({ user }) => {
+      setAppStateLoaded(false);
+      setRole('admin');
+      setCurrentUserEmail(normalizeEmail(user.email));
+      setStudentProfile({ ...initialStudentProfile, ...user.profile });
+      setIsAuthenticated(true);
+      setScreen('admin');
+      return { ok: true };
+    }).catch((error) => ({ ok: false, message: error.message }));
   }
 
   function logout() {
+    apiRequest('/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
     setRole('student');
     setIsAuthenticated(false);
     setResult(null);
-    localStorage.removeItem('attestatsiya.session');
     setScreen('login');
   }
 
@@ -603,9 +804,13 @@ function App() {
     if (screen === 'certificate') return <CertificatePage selectedDirection={selectedDirection} result={result} studentProfile={studentProfile} />;
     if (screen === 'profile') return <ProfilePage studentProfile={studentProfile} setStudentProfile={setStudentProfile} />;
     if (screen === 'notifications') return <NotificationsPage role={role} currentUserEmail={currentUserEmail} users={users} messages={messages} setMessages={setMessages} />;
+    if (screen.startsWith('admin') && role !== 'admin') return <DashboardPage {...props} />;
     if (screen === 'admin') return <AdminDashboard questions={questions} directionAccess={directionAccess} lessonAccess={lessonAccess} directionLessons={directionLessons} completedDirections={completedDirections} directions={managedDirections} setScreen={setScreen} databaseStatus={databaseStatus} saveStatus={saveStatus} studentProfile={studentProfile} users={users} />;
     if (screen === 'admin-directions') return <AdminDirections directions={managedDirections} setDirections={setManagedDirections} setDirectionAccess={setDirectionAccess} setLessonAccess={setLessonAccess} setDirectionLessons={setDirectionLessons} setSelectedDirection={setSelectedDirection} setUsers={setUsers} />;
-    if (screen === 'admin-questions') return <AdminQuestions questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
+    if (screen === 'admin-theory-questions') return <AdminTheoryQuestions questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
+    if (screen === 'admin-test-questions' || screen === 'admin-questions') return <AdminQuestions mode="test" questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
+    if (screen === 'admin-code-tasks') return <AdminQuestions mode="code" questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
+    if (screen === 'admin-final-tasks') return <AdminQuestions mode="final" questions={questions} setQuestions={setQuestions} directions={managedDirections} directionLessons={directionLessons} />;
     if (screen === 'admin-access') return <AdminAccess directionLessons={directionLessons} directions={managedDirections} users={users} setUsers={setUsers} currentUserEmail={currentUserEmail} setDirectionAccess={setDirectionAccess} setLessonAccess={setLessonAccess} setCompletedDirections={setCompletedDirections} />;
     if (screen === 'admin-users') return <AdminUsers users={users} setUsers={setUsers} messages={messages} setMessages={setMessages} currentUserEmail={currentUserEmail} setCurrentUserEmail={setCurrentUserEmail} setStudentProfile={setStudentProfile} />;
     if (screen === 'admin-topic') return <AdminTopic {...props} />;
@@ -615,11 +820,31 @@ function App() {
 
   if (['home', 'register', 'login'].includes(screen) || !isAuthenticated) return page;
 
+  /*
+  async function resetUserPassword() {
+    const targetEmail = normalizeEmail(form.email || selectedEmail);
+    if (!targetEmail || form.nextPassword.length < 8) {
+      setMessage('Yangi parol kamida 8 belgidan iborat bo‘lsin.');
+      return;
+    }
+    try {
+      const result = await apiRequest('/admin/users/password', {
+        method: 'POST',
+        body: JSON.stringify({ email: targetEmail, nextPassword: form.nextPassword }),
+      });
+      setForm((current) => ({ ...current, nextPassword: '' }));
+      setMessage(result.message || 'User paroli yangilandi.');
+    } catch (error) {
+      setMessage(error.message || 'User parolini yangilab bo‘lmadi.');
+    }
+  }
+
+  */
   return (
     <div className="shell">
       <Sidebar role={role} screen={screen} setScreen={setScreen} onLogout={logout} />
       <main className="main">
-        <Topbar role={role} setRole={setRole} setScreen={setScreen} studentProfile={studentProfile} currentUserEmail={currentUserEmail} messages={messages} />
+        <Topbar role={role} setScreen={setScreen} studentProfile={studentProfile} currentUserEmail={currentUserEmail} messages={messages} />
         {page}
       </main>
     </div>
@@ -665,12 +890,12 @@ function RegisterPage({ setScreen, onRegister }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [message, setMessage] = useState('');
 
-  function submit() {
+  async function submit() {
     if (password !== confirmPassword) {
       setMessage('Parol tasdigʻi mos emas.');
       return;
     }
-    const result = onRegister({ fullName, email, password });
+    const result = await onRegister({ fullName, email, password });
     if (!result.ok) setMessage(result.message);
   }
 
@@ -694,11 +919,19 @@ function RegisterPage({ setScreen, onRegister }) {
 }
 
 function LoginPage({ setScreen, onLogin, onAdminLogin }) {
-  const [email, setEmail] = useState(defaultStudentEmail);
-  const [password, setPassword] = useState('123456');
+  const [mode, setMode] = useState('student');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
+  const isAdmin = mode === 'admin';
 
-  function submit() {
+  async function secureSubmit() {
+    setMessage('');
+    const result = isAdmin ? await onAdminLogin(email, password) : await onLogin(email, password);
+    if (!result.ok) setMessage(result.message || 'Login yoki parol xato.');
+  }
+
+  async function submit() {
     if (!onLogin(email, password)) setMessage('Email yoki parol notoʻgʻri.');
   }
 
@@ -706,12 +939,15 @@ function LoginPage({ setScreen, onLogin, onAdminLogin }) {
     <div className="public auth-split">
       <form className="auth-card">
         <Brand />
-        <h2>Tizimga kirish</h2>
-        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <h2>{isAdmin ? 'Admin login' : 'Tizimga kirish'}</h2>
+        <div className="segmented">
+          <button type="button" className={!isAdmin ? 'active' : ''} onClick={() => setMode('student')}><User size={16} /> O'quvchi</button>
+          <button type="button" className={isAdmin ? 'active' : ''} onClick={() => setMode('admin')}><ShieldCheck size={16} /> Admin</button>
+        </div>
+        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
         <label>Parol<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
         {message && <div className="notice auth-notice"><InfoIcon size={18} /> {message}</div>}
-        <button type="button" className="primary wide" onClick={submit}><LogIn size={18} /> Kirish</button>
-        <button type="button" className="ghost wide" onClick={onAdminLogin}><ShieldCheck size={18} /> Admin sifatida kirish</button>
+        <button type="button" className="primary wide" onClick={secureSubmit}><LogIn size={18} /> Kirish</button>
         <p>Hisobingiz yo'qmi? <button type="button" className="link" onClick={() => setScreen('register')}><UserPlus size={15} /> Ro'yxatdan o'tish</button></p>
       </form>
       <StudentVisual variant="side" compact />
@@ -774,7 +1010,7 @@ function Sidebar({ role, screen, setScreen, onLogout }) {
   );
 }
 
-function Topbar({ role, setRole, setScreen, studentProfile, currentUserEmail, messages }) {
+function Topbar({ role, setScreen, studentProfile, currentUserEmail, messages }) {
   const initial = studentProfile.fullName?.trim()?.[0]?.toUpperCase() || 'O';
   const unreadCount = role === 'admin'
     ? messages.filter((item) => item.to === 'admin' && !item.readByAdmin).length
@@ -785,7 +1021,7 @@ function Topbar({ role, setRole, setScreen, studentProfile, currentUserEmail, me
       <div className="top-actions">
         <Search size={18} />
         <button type="button" className="icon-btn badge-button" onClick={() => setScreen('notifications')}><Bell size={17} />{unreadCount > 0 && <i>{unreadCount}</i>}</button>
-        <button className="avatar" onClick={() => { const next = role === 'admin' ? 'student' : 'admin'; setRole(next); setScreen(next === 'admin' ? 'admin' : 'dashboard'); }}>{initial}</button>
+        <button type="button" className="avatar" onClick={() => setScreen(role === 'admin' ? 'admin' : 'profile')}>{initial}</button>
       </div>
     </header>
   );
@@ -921,29 +1157,116 @@ function StageTabs({ active, setScreen }) {
   return <div className="stage-tabs">{tabs.map(([id, label]) => <button key={id} className={active === id ? 'active' : ''} onClick={() => setScreen(id)}>{label}</button>)}</div>;
 }
 
-function TheoryPage({ setScreen, selectedDirection, selectedLesson, courseLessons, lessonContents }) {
+function TheoryPage({ setScreen, selectedDirection, selectedLesson, courseLessons, lessonContents, questions }) {
   const lesson = courseLessons[selectedLesson] || courseLessons[0];
   const content = getLessonContent(lessonContents, selectedDirection, lesson) || {
     title: lesson,
     text: 'Bu mavzu uchun nazariy dars hali kiritilmagan. Admin panel orqali dars matni qo\'shing.',
     videoUrl: '',
+    codeSnippet: '',
   };
 
+  const codeSnippet = content.codeSnippet || getDefaultCodeSnippet(selectedDirection, lesson);
+  const ytUrl = getYouTubeEmbedUrl(content.videoUrl);
+  const theoryQuestions = getQuestions(questions, selectedDirection, lesson, 'theory');
+
   return (
-    <section className="panel lesson-page">
-      <h2>{selectedLesson + 1}. {lesson}</h2>
-      <p>1-qism: Nazariy qism</p>
+    <section className="panel lesson-page rounded-xl border border-slate-800 bg-slate-900/40 backdrop-blur-md p-6 shadow-xl">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-black text-slate-100 tracking-tight">{selectedLesson + 1}. {lesson}</h2>
+          <span className="text-xs text-blue-400 font-semibold uppercase tracking-wider mt-1 block">1-qism: Nazariy dars</span>
+        </div>
+        <button
+          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-sm shadow-lg hover:shadow-blue-500/20 active:scale-95 transition-all duration-200"
+          onClick={() => setScreen('practice')}
+        >
+          Keyingi: Amaliyot <ArrowRight size={16} />
+        </button>
+      </div>
+
       <StageTabs active="theory" setScreen={setScreen} />
-      <div className="media-layout">
-        <div className="video-card"><Code2 size={72} /><strong>{lesson}</strong><span>{content.videoUrl ? 'Video havola kiritilgan' : 'Video dars'}</span></div>
-        <article>
-          <h3>{content.title}</h3>
-          <p>{content.text}</p>
-          {content.videoUrl && <p><a href={content.videoUrl} target="_blank" rel="noreferrer">Video darsni ochish</a></p>}
-          <pre>{'name = "Ali"\nage = 15\nprint(name)\nprint(age)'}</pre>
-          <button className="primary" onClick={() => setScreen('practice')}><ArrowRight size={18} /> Keyingi: Amaliyot</button>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-6">
+        <div className="flex flex-col gap-6">
+          {content.videoUrl ? (
+            ytUrl ? (
+              <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 group">
+                <iframe
+                  className="absolute top-0 left-0 w-full h-full border-0"
+                  src={ytUrl}
+                  title="YouTube video player"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                ></iframe>
+              </div>
+            ) : (
+              <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 p-1 flex items-center justify-center">
+                <video className="w-full h-full object-cover rounded-lg" src={content.videoUrl} controls />
+              </div>
+            )
+          ) : (
+            <div className="relative w-full aspect-video rounded-xl border border-slate-850 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 flex flex-col items-center justify-center gap-4 text-center p-6 shadow-xl overflow-hidden group transition-all duration-300 hover:border-blue-500/25">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(59,130,246,0.06),transparent)]"></div>
+              <div className="w-14 h-14 rounded-full bg-blue-500/10 flex items-center justify-center border border-blue-500/15 text-blue-400 group-hover:scale-105 transition-transform duration-300">
+                <Code2 size={28} />
+              </div>
+              <div>
+                <h4 className="text-slate-200 font-bold text-base tracking-wide group-hover:text-blue-400 transition-colors duration-300">{lesson}</h4>
+                <p className="text-slate-400 text-xs mt-1 max-w-[260px] mx-auto leading-relaxed">Ushbu dars uchun video darslik havola qilinmagan. Quyidagi nazariy materialni o'rganing.</p>
+              </div>
+            </div>
+          )}
+
+          <div className="bg-slate-950/60 rounded-xl p-5 border border-slate-850/80">
+            <h4 className="text-slate-300 font-bold text-sm tracking-wider uppercase mb-3 flex items-center gap-2">
+              <Code2 size={16} className="text-emerald-400" />
+              Tavsiya etilgan kod namunasi
+            </h4>
+            <pre className="p-4 bg-slate-950 text-emerald-400 rounded-lg border border-slate-800 font-mono text-sm leading-relaxed overflow-auto max-h-[300px] shadow-inner">{codeSnippet}</pre>
+          </div>
+        </div>
+
+        <article className="prose prose-invert max-w-none bg-slate-950/30 rounded-xl border border-slate-850 p-6 flex flex-col justify-between">
+          <div className="flex flex-col gap-4">
+            <h3 className="text-xl font-bold text-slate-100 flex items-center gap-2.5">
+              <span className="w-2 h-6 bg-blue-500 rounded-full"></span>
+              {content.title}
+            </h3>
+            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{content.text}</p>
+            {content.videoUrl && !ytUrl && (
+              <p className="mt-2">
+                <a
+                  href={content.videoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 underline"
+                >
+                  Video darsni alohida oynada ochish
+                </a>
+              </p>
+            )}
+          </div>
+
+          <button
+            className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 hover:text-blue-300 border border-blue-500/20 font-bold text-sm tracking-wide mt-6 transition-all duration-200"
+            onClick={() => setScreen('practice')}
+          >
+            Keyingi qadam: Amaliy topshiriq <ArrowRight size={16} />
+          </button>
         </article>
       </div>
+      {theoryQuestions.length > 0 && (
+        <div className="theory-question-list">
+          <h3>Nazariy savollar</h3>
+          {theoryQuestions.map((item, index) => (
+            <article key={item.id || `${item.question}-${index}`}>
+              <b>{index + 1}. {item.question}</b>
+              {item.theoryAnswer && <p>{item.theoryAnswer}</p>}
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -972,6 +1295,23 @@ function getQuestions(questions, selectedDirection, lesson, section) {
   return starterQuestions.filter((item) => item.section === section);
 }
 
+function getCodeLanguage(direction) {
+  const text = String(direction || '').toLowerCase();
+  if (text.includes('python')) return 'python';
+  return 'python';
+}
+
+async function checkCodeOnServer({ code, direction, checkWords }) {
+  return apiRequest('/code/check', {
+    method: 'POST',
+    body: JSON.stringify({
+      code,
+      language: getCodeLanguage(direction),
+      checkWords,
+    }),
+  });
+}
+
 function PracticePage({ setScreen, questions, selectedDirection, selectedLesson, courseLessons, setResult }) {
   const lesson = getCurrentLesson(courseLessons, selectedLesson);
   const tasks = getQuestions(questions, selectedDirection, lesson, 'practice');
@@ -979,6 +1319,8 @@ function PracticePage({ setScreen, questions, selectedDirection, selectedLesson,
   const task = tasks[taskIndex] || starterQuestions[1];
   const [code, setCode] = useState(task.code || '');
   const [message, setMessage] = useState('');
+  const [output, setOutput] = useState('');
+  const [checking, setChecking] = useState(false);
   const [solved, setSolved] = useState({});
 
   useEffect(() => {
@@ -989,25 +1331,48 @@ function PracticePage({ setScreen, questions, selectedDirection, selectedLesson,
   useEffect(() => {
     setCode(task.code || '');
     setMessage('');
+    setOutput('');
   }, [task.id, taskIndex]);
 
-  function check() {
-    const normalized = code.toLowerCase();
+  const fileDetails = useMemo(() => {
+    const dir = String(selectedDirection || '').toLowerCase();
+    if (dir.includes('python')) return { ext: '.py', accept: '.py,.txt', label: 'Fayl yuklash (.py)' };
+    if (dir.includes('arduino') || dir.includes('esp32')) return { ext: '.ino', accept: '.ino,.cpp,.txt', label: 'Fayl yuklash (.ino)' };
+    if (dir.includes('web') || dir.includes('html') || dir.includes('javascript')) return { ext: '.html', accept: '.html,.css,.js,.txt', label: 'Fayl yuklash (.html)' };
+    return { ext: '.txt', accept: '.txt', label: 'Fayl yuklash (.txt)' };
+  }, [selectedDirection]);
+
+  async function check() {
+    setChecking(true);
+    setOutput('');
     const checkWords = task.checkWords?.length ? task.checkWords : [];
-    const ok = checkWords.length
-      ? checkWords.every((word) => normalized.includes(word.toLowerCase()))
-      : code.trim().length > 0 && code !== (task.code || '');
-    const nextSolved = { ...solved, [task.id]: ok };
-    const correct = Object.values(nextSolved).filter(Boolean).length;
-    const total = Math.max(tasks.length, 1);
-    setMessage(ok ? 'Yechim qabul qilindi.' : 'Yechimda kerakli qismlar yetishmayapti.');
-    setSolved(nextSolved);
-    setResult({ percent: Math.round((correct / total) * 100), correct, wrong: total - correct, score: Math.round((correct / total) * 100) });
+    try {
+      const result = await checkCodeOnServer({ code, direction: selectedDirection, checkWords });
+      const ok = Boolean(result.ok);
+      const nextSolved = { ...solved, [task.id]: ok };
+      const correct = Object.values(nextSolved).filter(Boolean).length;
+      const total = Math.max(tasks.length, 1);
+      setMessage(result.message || (ok ? 'Yechim qabul qilindi.' : 'Yechimda kerakli qismlar yetishmayapti.'));
+      setOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
+      setSolved(nextSolved);
+      setResult({ percent: Math.round((correct / total) * 100), correct, wrong: total - correct, score: Math.round((correct / total) * 100) });
+    } catch (error) {
+      setMessage(error.message || 'Kod tekshirishda xato yuz berdi.');
+    } finally {
+      setChecking(false);
+    }
   }
 
   async function uploadCode(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    const allowedExtensions = fileDetails.accept.split(',').map((item) => item.trim().toLowerCase());
+    const fileName = file.name.toLowerCase();
+    if (file.size > 128 * 1024 || !allowedExtensions.some((ext) => fileName.endsWith(ext))) {
+      setMessage('Fayl turi yoki hajmi ruxsat etilmagan.');
+      event.target.value = '';
+      return;
+    }
     setCode(await file.text());
     setMessage(`${file.name} fayli yuklandi. Endi yechimni tekshirishingiz mumkin.`);
     event.target.value = '';
@@ -1027,11 +1392,12 @@ function PracticePage({ setScreen, questions, selectedDirection, selectedLesson,
         <textarea className="code-editor" value={code} onChange={(event) => setCode(event.target.value)} />
       </div>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
+      {output && <pre className="execution-output">{output}</pre>}
       <div className="actions end">
         <button className="ghost" disabled={taskIndex === 0} onClick={() => setTaskIndex((index) => index - 1)}><ArrowRight className="flip-icon" size={18} /> Oldingi</button>
         <button className="ghost" disabled={taskIndex >= tasks.length - 1} onClick={() => setTaskIndex((index) => index + 1)}><ArrowRight size={18} /> Keyingi topshiriq</button>
-        <label className="file-button ghost"><FileCode size={18} /> Fayl yuklash (.py)<input type="file" accept=".py,.txt" onChange={uploadCode} /></label>
-        <button className="primary" onClick={check}><ClipboardCheck size={18} /> Yechimni tekshirish</button>
+        <label className="file-button ghost"><FileCode size={18} /> {fileDetails.label}<input type="file" accept={fileDetails.accept} onChange={uploadCode} /></label>
+        <button className="primary" disabled={checking} onClick={check}><ClipboardCheck size={18} /> {checking ? 'Tekshirilmoqda...' : 'Yechimni tekshirish'}</button>
       </div>
     </section>
   );
@@ -1090,7 +1456,7 @@ function TestPage({ setScreen, questions, selectedDirection, selectedLesson, cou
   );
 }
 
-function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson, courseLessons, setResult }) {
+function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson, setSelectedLesson, courseLessons, setResult, setLessonAccess }) {
   const lesson = getCurrentLesson(courseLessons, selectedLesson);
   const finalTasks = getQuestions(questions, selectedDirection, lesson, 'final');
   const task = finalTasks[0] || {
@@ -1100,19 +1466,35 @@ function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson
   };
   const [code, setCode] = useState(task.code || '# Kodi shu yerga yozing');
   const [message, setMessage] = useState('');
+  const [output, setOutput] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const hasNextLesson = selectedLesson < courseLessons.length - 1;
 
   useEffect(() => {
     setCode(task.code || '# Kodi shu yerga yozing');
     setMessage('');
+    setOutput('');
+    setCompleted(false);
   }, [task.id, task.code]);
 
-  function submit() {
-    const normalized = code.toLowerCase();
+  async function submit() {
+    setChecking(true);
+    setOutput('');
     const checkWords = task.checkWords?.length ? task.checkWords : ['input', 'print'];
-    const ok = checkWords.every((word) => normalized.includes(String(word).toLowerCase()));
-    setMessage(ok ? 'Yakuniy topshiriq qabul qilindi.' : `Topshiriqda quyidagilar ishlatilishi kerak: ${checkWords.join(', ')}.`);
-    setResult({ percent: ok ? 90 : 50, correct: ok ? 23 : 12, wrong: ok ? 2 : 13, score: ok ? 90 : 50 });
-    if (ok) setScreen('exam');
+    try {
+      const result = await checkCodeOnServer({ code, direction: selectedDirection, checkWords });
+      const ok = Boolean(result.ok);
+      const openedNext = ok ? unlockNextLesson(setLessonAccess, selectedDirection, selectedLesson, courseLessons) : false;
+      setMessage(ok ? (openedNext ? 'Mavzu tugadi. Keyingi mavzu ochildi.' : 'Mavzu tugadi. Yakuniy imtihonga o\'tishingiz mumkin.') : (result.message || `Topshiriqda quyidagilar ishlatilishi kerak: ${checkWords.join(', ')}.`));
+      setOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
+      setResult({ percent: ok ? 90 : 50, correct: ok ? 23 : 12, wrong: ok ? 2 : 13, score: ok ? 90 : 50 });
+      setCompleted(ok);
+    } catch (error) {
+      setMessage(error.message || 'Kod tekshirishda xato yuz berdi.');
+    } finally {
+      setChecking(false);
+    }
   }
 
   return (
@@ -1125,7 +1507,16 @@ function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson
         <textarea className="code-editor" value={code} onChange={(event) => setCode(event.target.value)} />
       </div>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
-      <button className="primary" onClick={submit}><ClipboardCheck size={18} /> Topshirish</button>
+      {output && <pre className="execution-output">{output}</pre>}
+      <div className="actions">
+        <button className="primary" disabled={checking} onClick={submit}><ClipboardCheck size={18} /> {checking ? 'Tekshirilmoqda...' : 'Topshirish'}</button>
+        {completed && hasNextLesson && (
+          <button className="success-btn" onClick={() => { setSelectedLesson(selectedLesson + 1); setScreen('theory'); }}><ArrowRight size={18} /> Keyingi mavzuga o'tish</button>
+        )}
+        {completed && !hasNextLesson && (
+          <button className="success-btn" onClick={() => setScreen('exam')}><Trophy size={18} /> Yakuniy imtihonga o'tish</button>
+        )}
+      </div>
     </section>
   );
 }
@@ -1250,8 +1641,36 @@ function CertificatePage({ selectedDirection, result, studentProfile }) {
 }
 
 function ProfilePage({ studentProfile, setStudentProfile }) {
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', nextPassword: '', confirmPassword: '' });
+  const [passwordMessage, setPasswordMessage] = useState('');
+
   function updateProfile(field, value) {
     setStudentProfile((current) => ({ ...current, [field]: value }));
+  }
+
+  function updatePasswordField(field, value) {
+    setPasswordForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function changePassword() {
+    setPasswordMessage('');
+    if (passwordForm.nextPassword !== passwordForm.confirmPassword) {
+      setPasswordMessage('Yangi parol tasdig‘i mos emas.');
+      return;
+    }
+    try {
+      const result = await apiRequest('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          currentPassword: passwordForm.currentPassword,
+          nextPassword: passwordForm.nextPassword,
+        }),
+      });
+      setPasswordMessage(result.message || 'Parol yangilandi.');
+      setPasswordForm({ currentPassword: '', nextPassword: '', confirmPassword: '' });
+    } catch (error) {
+      setPasswordMessage(error.message || 'Parolni yangilab bo‘lmadi.');
+    }
   }
 
   return (
@@ -1263,6 +1682,14 @@ function ProfilePage({ studentProfile, setStudentProfile }) {
         <label>Email<input value={studentProfile.email} onChange={(event) => updateProfile('email', event.target.value)} /></label>
         <label>Telefon<input value={studentProfile.phone} onChange={(event) => updateProfile('phone', event.target.value)} /></label>
         <label>Tug'ilgan sana<input value={studentProfile.birthDate} onChange={(event) => updateProfile('birthDate', event.target.value)} /></label>
+      </div>
+      <div className="profile-form password-panel">
+        <h3>Parolni o'zgartirish</h3>
+        <label>Hozirgi parol<input type="password" value={passwordForm.currentPassword} onChange={(event) => updatePasswordField('currentPassword', event.target.value)} /></label>
+        <label>Yangi parol<input type="password" value={passwordForm.nextPassword} onChange={(event) => updatePasswordField('nextPassword', event.target.value)} /></label>
+        <label>Yangi parolni tasdiqlash<input type="password" value={passwordForm.confirmPassword} onChange={(event) => updatePasswordField('confirmPassword', event.target.value)} /></label>
+        {passwordMessage && <div className="notice"><InfoIcon size={18} /> {passwordMessage}</div>}
+        <button className="primary" onClick={changePassword}><Save size={18} /> Parolni yangilash</button>
       </div>
     </section>
   );
@@ -1431,8 +1858,11 @@ function AdminDashboard({ questions, directionAccess, lessonAccess, directionLes
           <button onClick={() => setScreen('admin-directions')}><Rocket size={18} /><span>1. Yo'nalish qo'shish</span><small>Python, Arduino yoki yangi kurs nomi</small></button>
           <button onClick={() => setScreen('admin-topic')}><Plus size={18} /><span>2. Mavzu qo'shish</span><small>Tanlangan yo'nalish ichiga dars mavzulari</small></button>
           <button onClick={() => setScreen('admin-lesson')}><BookOpen size={18} /><span>3. Dars qo'shish</span><small>Nazariya matni va video havolasi</small></button>
-          <button onClick={() => setScreen('admin-questions')}><FileQuestion size={18} /><span>4. Test va nazoratlar</span><small>Test, kodli topshiriq, yakuniy nazorat</small></button>
-          <button onClick={() => setScreen('admin-access')}><ShieldCheck size={18} /><span>5. Ruxsatlar</span><small>O'quvchi qaysi mavzugacha kirishini belgilang</small></button>
+          <button onClick={() => setScreen('admin-theory-questions')}><ClipboardCheck size={18} /><span>4. Nazariy savol-javob</span><small>Nazariya sahifasida alohida ko'rinadi</small></button>
+          <button onClick={() => setScreen('admin-test-questions')}><FileQuestion size={18} /><span>5. Test qo'shish</span><small>Mavzu bo'yicha variantli test</small></button>
+          <button onClick={() => setScreen('admin-code-tasks')}><Code2 size={18} /><span>6. Kod yozish qismi</span><small>Amaliy dastur yozish topshirig'i</small></button>
+          <button onClick={() => setScreen('admin-final-tasks')}><Award size={18} /><span>7. Yakuniy quiz va dastur</span><small>Yo'nalish tugaganda ishlaydi</small></button>
+          <button onClick={() => setScreen('admin-access')}><ShieldCheck size={18} /><span>8. Ruxsatlar</span><small>O'quvchi qaysi mavzugacha kirishini belgilang</small></button>
         </div>
 
         <div className="student-track">
@@ -1461,9 +1891,9 @@ function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, 
   const [form, setForm] = useState({
     fullName: selectedUser?.profile?.fullName || '',
     email: selectedUser?.email || '',
-    password: selectedUser?.password || '',
     phone: selectedUser?.profile?.phone || '',
     birthDate: selectedUser?.profile?.birthDate || '',
+    nextPassword: '',
   });
   const [message, setMessage] = useState('');
 
@@ -1474,9 +1904,9 @@ function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, 
     setForm({
       fullName: user.profile?.fullName || '',
       email: user.email || '',
-      password: user.password || '',
       phone: user.profile?.phone || '',
       birthDate: user.profile?.birthDate || '',
+      nextPassword: '',
     });
   }, [selectedEmail, users]);
 
@@ -1486,8 +1916,8 @@ function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, 
 
   function saveUser() {
     const nextEmail = normalizeEmail(form.email);
-    if (!selectedUser || !nextEmail || !form.password.trim() || !form.fullName.trim()) {
-      setMessage("Ism, login/email va parol bo'sh bo'lmasin.");
+    if (!selectedUser || !nextEmail || !form.fullName.trim()) {
+      setMessage("Ism va login/email bo'sh bo'lmasin.");
       return;
     }
     if (nextEmail !== selectedEmail && users[nextEmail]) {
@@ -1496,7 +1926,6 @@ function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, 
     }
 
     const updates = {
-      password: form.password,
       profile: {
         ...selectedUser.profile,
         fullName: form.fullName.trim(),
@@ -1524,18 +1953,40 @@ function AdminUsers({ users, setUsers, messages, setMessages, currentUserEmail, 
             <button key={user.email} className={selectedEmail === user.email ? 'active' : ''} onClick={() => setSelectedEmail(user.email)}>
               <b>{user.profile?.fullName || user.email}</b>
               <small>{user.email}</small>
-              <span>Parol: {user.password}</span>
+              <span>Rol: {user.role || 'student'}</span>
             </button>
           ))}
         </div>
         <div>
           <label>To'liq ism<input value={form.fullName} onChange={(event) => updateField('fullName', event.target.value)} /></label>
           <label>Login / Email<input value={form.email} onChange={(event) => updateField('email', event.target.value)} /></label>
-          <label>Parol<input value={form.password} onChange={(event) => updateField('password', event.target.value)} /></label>
           <label>Telefon<input value={form.phone} onChange={(event) => updateField('phone', event.target.value)} /></label>
           <label>Tug'ilgan sana<input value={form.birthDate} onChange={(event) => updateField('birthDate', event.target.value)} /></label>
+          <label>Yangi parol<input type="password" value={form.nextPassword} onChange={(event) => updateField('nextPassword', event.target.value)} placeholder="Kamida 8 belgi" /></label>
           {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
-          <button className="primary" onClick={saveUser}><Save size={18} /> Saqlash</button>
+          <div className="actions">
+            <button className="primary" onClick={saveUser}><Save size={18} /> Saqlash</button>
+            <button
+              className="ghost"
+              onClick={async () => {
+                const targetEmail = normalizeEmail(form.email || selectedEmail);
+                if (!targetEmail || form.nextPassword.length < 8) {
+                  setMessage('Yangi parol kamida 8 belgidan iborat bo‘lsin.');
+                  return;
+                }
+                try {
+                  const result = await apiRequest('/admin/users/password', {
+                    method: 'POST',
+                    body: JSON.stringify({ email: targetEmail, nextPassword: form.nextPassword }),
+                  });
+                  setForm((current) => ({ ...current, nextPassword: '' }));
+                  setMessage(result.message || 'User paroli yangilandi.');
+                } catch (error) {
+                  setMessage(error.message || 'User parolini yangilab bo‘lmadi.');
+                }
+              }}
+            ><Lock size={18} /> Parolni yangilash</button>
+          </div>
         </div>
       </div>
     </section>
@@ -1683,16 +2134,124 @@ function AdminDirections({ directions, setDirections, setDirectionAccess, setLes
   );
 }
 
-function AdminQuestions({ questions, setQuestions, directions, directionLessons }) {
+function AdminTheoryQuestions({ questions, setQuestions, directions, directionLessons }) {
+  const [message, setMessage] = useState('');
+  const [direction, setDirection] = useState(directions[0]?.title || '');
+  const [topic, setTopic] = useState((directionLessons[directions[0]?.title] || lessons)[0] || '');
+  const [question, setQuestion] = useState('');
+  const [theoryAnswer, setTheoryAnswer] = useState('');
+
+  const theoryQuestions = questions.filter((item) => item.section === 'theory');
+
+  function selectDirection(value) {
+    const topics = directionLessons[value] || [];
+    setDirection(value);
+    setTopic(topics[0] || '');
+  }
+
+  function saveTheoryQuestion() {
+    const text = question.trim();
+    if (!direction || !topic || !text) {
+      setMessage("Yo'nalish, mavzu va nazariy savolni to'ldiring.");
+      return;
+    }
+
+    const item = {
+      id: createId(),
+      direction,
+      topic,
+      section: 'theory',
+      question: text,
+      theoryAnswer: theoryAnswer.trim(),
+      answers: [],
+      correct: 0,
+      points: 0,
+    };
+
+    setQuestions((current) => [...current, item]);
+    setQuestion('');
+    setTheoryAnswer('');
+    setMessage('Nazariy savol alohida bo\'limga qo\'shildi.');
+  }
+
+  return (
+    <section className="panel form-panel">
+      <Title title="Nazariy savollar" subtitle="Nazariya sahifasida ko'rinadigan savollar. Bu test balliga qo'shilmaydi." />
+      <div className="content-form-grid">
+        <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
+        <label>Mavzu<select value={topic} onChange={(event) => setTopic(event.target.value)}>{(directionLessons[direction] || []).map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
+      </div>
+      <label>Nazariy savol<textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Masalan: O'zgaruvchi nima va nima uchun kerak?" /></label>
+      <label>Javob / izoh<textarea value={theoryAnswer} onChange={(event) => setTheoryAnswer(event.target.value)} placeholder="O'quvchi ko'rishi uchun qisqa izoh yoki javob." /></label>
+      {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
+      <button className="primary" onClick={saveTheoryQuestion}><Save size={18} /> Nazariy savol qo'shish</button>
+      <div className="question-table">
+        {theoryQuestions.map((item, index) => <p key={item.id}><b>{index + 1}</b><span>{item.direction}</span><span>{item.topic}</span><em>{item.question}</em></p>)}
+      </div>
+    </section>
+  );
+}
+
+const adminQuestionModes = {
+  test: {
+    title: "Test qo'shish",
+    subtitle: "Mavzu bo'yicha oddiy variantli test savollarini kiriting.",
+    sections: ['test'],
+    defaultSection: 'test',
+    button: "Test qo'shish",
+    questionLabel: 'Test savoli',
+    questionPlaceholder: "Masalan: Python izoh (comment) qanday yoziladi?",
+    listSections: ['test'],
+  },
+  code: {
+    title: 'Kod yozish qismi',
+    subtitle: "O'quvchi amaliyot bosqichida bajaradigan kod yozish topshiriqlarini kiriting.",
+    sections: ['practice'],
+    defaultSection: 'practice',
+    button: "Kodli topshiriq qo'shish",
+    questionLabel: 'Kod yozish topshirig‘i',
+    questionPlaceholder: "Masalan: name o'zgaruvchisini yarating va ekranga chiqaring.",
+    listSections: ['practice'],
+  },
+  final: {
+    title: 'Yakuniy quiz va dastur',
+    subtitle: "Yo'nalish tugaganda ishlaydigan yakuniy quiz va yakuniy dastur topshirig'ini kiriting.",
+    sections: ['exam', 'final'],
+    defaultSection: 'exam',
+    button: "Yakuniy nazorat qo'shish",
+    questionLabel: 'Yakuniy savol yoki dastur sharti',
+    questionPlaceholder: "Masalan: yakuniy quiz savoli yoki final dastur sharti.",
+    listSections: ['exam', 'final'],
+  },
+};
+
+function getSectionLabel(section) {
+  if (section === 'test') return 'Test';
+  if (section === 'practice') return 'Kod yozish';
+  if (section === 'final') return 'Yakuniy dastur';
+  if (section === 'exam') return 'Yakuniy quiz';
+  return section;
+}
+
+function AdminQuestions({ mode = 'test', questions, setQuestions, directions, directionLessons }) {
+  const config = adminQuestionModes[mode] || adminQuestionModes.test;
   const [message, setMessage] = useState('');
   const [direction, setDirection] = useState(directions[0].title);
   const [topic, setTopic] = useState((directionLessons[directions[0].title] || lessons)[0]);
-  const [section, setSection] = useState('test');
+  const [section, setSection] = useState(config.defaultSection);
   const [question, setQuestion] = useState('');
-  const [answers, setAnswers] = useState('');
-  const [correct, setCorrect] = useState('1');
+  const [answerOptions, setAnswerOptions] = useState(['', '', '', '']);
+  const [correct, setCorrect] = useState(0);
   const [code, setCode] = useState('# Kodi shu yerga yozing');
   const [checkWords, setCheckWords] = useState('');
+  const controlQuestions = questions.filter((item) => config.listSections.includes(item.section));
+
+  useEffect(() => {
+    setSection(config.defaultSection);
+    setMessage('');
+    setAnswerOptions(['', '', '', '']);
+    setCorrect(0);
+  }, [config.defaultSection, mode]);
 
   function selectDirection(value) {
     const topics = directionLessons[value] || [];
@@ -1707,10 +2266,10 @@ function AdminQuestions({ questions, setQuestions, directions, directionLessons 
       return;
     }
 
-    const answerList = splitList(answers);
     const isChoice = section === 'test' || section === 'exam';
-    if (isChoice && answerList.length < 2) {
-      setMessage('Test yoki yakuniy nazorat uchun kamida 2 ta javob varianti kiriting.');
+    const answerList = isChoice ? answerOptions.map((item) => item.trim()) : [];
+    if (isChoice && answerList.some((item) => !item)) {
+      setMessage("A, B, C, D variantlarning hammasini to'ldiring.");
       return;
     }
 
@@ -1721,23 +2280,30 @@ function AdminQuestions({ questions, setQuestions, directions, directionLessons 
       section,
       question: text,
       answers: answerList,
-      correct: parseCorrectAnswer(correct, answerList),
+      correct: Number(correct),
       code: code.trim() || '# Kodi shu yerga yozing',
       checkWords: splitList(checkWords),
       points: section === 'practice' ? 8 : 4,
     };
     setQuestions((current) => [...current, item]);
     setQuestion('');
-    setAnswers('');
-    setCorrect('1');
+    setAnswerOptions(['', '', '', '']);
+    setCorrect(0);
     setCode('# Kodi shu yerga yozing');
     setCheckWords('');
-    setMessage(`${section === 'exam' ? 'Yakuniy nazorat' : section === 'practice' ? 'Kodli topshiriq' : section === 'final' ? 'Yakuniy topshiriq' : 'Test'} qo'shildi.`);
+    setMessage(`${getSectionLabel(section)} qo'shildi.`);
   }
 
   async function importExcel(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    const allowed = ['.xlsx', '.xls', '.csv'];
+    const fileName = file.name.toLowerCase();
+    if (file.size > 1024 * 1024 || !allowed.some((ext) => fileName.endsWith(ext))) {
+      setMessage('Faqat 1MB gacha boКјlgan .xlsx, .xls yoki .csv fayl yuklang.');
+      event.target.value = '';
+      return;
+    }
     try {
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
@@ -1760,28 +2326,48 @@ function AdminQuestions({ questions, setQuestions, directions, directionLessons 
 
   return (
     <section className="panel form-panel">
-      <Title title="Test va nazoratlar" subtitle="Mavzu ichiga test, kodli topshiriq yoki yakuniy nazorat qo'shing. Excel orqali ham yuklash mumkin." />
+      <Title title={config.title} subtitle={config.subtitle} />
       <div className="content-form-grid">
         <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
         <label>Mavzu<select value={topic} onChange={(event) => setTopic(event.target.value)}>{(directionLessons[direction] || []).map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
-        <label>Nazorat turi<select value={section} onChange={(event) => setSection(event.target.value)}><option value="test">Test</option><option value="practice">Kodli topshiriq</option><option value="final">Yakuniy topshiriq</option><option value="exam">Yakuniy nazorat</option></select></label>
+        {config.sections.length > 1 && (
+          <label>Nazorat turi<select value={section} onChange={(event) => setSection(event.target.value)}>{config.sections.map((item) => <option key={item} value={item}>{getSectionLabel(item)}</option>)}</select></label>
+        )}
       </div>
-      <label>Admin sharti / savol matni<textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Masalan: name o'zgaruvchisini yarating va ekranga chiqaring." /></label>
+      <label>{config.questionLabel}<textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={config.questionPlaceholder} /></label>
       {(section === 'test' || section === 'exam') && (
-        <div className="content-form-grid">
-          <label>Javob variantlari<textarea value={answers} onChange={(event) => setAnswers(event.target.value)} placeholder="Har bir variantni yangi qatorda yoki ; bilan kiriting" /></label>
-          <label>To'g'ri javob<input value={correct} onChange={(event) => setCorrect(event.target.value)} placeholder="1, A yoki javob matni" /></label>
+        <div className="answer-builder">
+          <b>Javob variantlari</b>
+          {answerOptions.map((value, index) => (
+            <label key={index} className="answer-option">
+              <input
+                type="radio"
+                name="correct-answer"
+                checked={correct === index}
+                onChange={() => setCorrect(index)}
+              />
+              <span>{String.fromCharCode(65 + index)}</span>
+              <input
+                value={value}
+                onChange={(event) => setAnswerOptions((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))}
+                placeholder={`${String.fromCharCode(65 + index)} variant`}
+              />
+            </label>
+          ))}
+          <small>To'g'ri javobni radio tugma bilan belgilang.</small>
         </div>
       )}
-      <div className="content-form-grid">
-        <label>Kod yozish uchun boshlang'ich input<textarea value={code} onChange={(event) => setCode(event.target.value)} placeholder="# Kodi shu yerga yozing" /></label>
-        <label>Tekshiruv kalit so'zlari<textarea value={checkWords} onChange={(event) => setCheckWords(event.target.value)} placeholder="print; input; name" /></label>
-      </div>
-      <button className="primary" onClick={saveManualQuestion}><Save size={18} /> Nazorat qo'shish</button>
-      <label className="upload-box"><Upload size={24} /> Excel fayl yuklash<input type="file" accept=".xlsx,.xls,.csv" onChange={importExcel} /></label>
+      {(section === 'practice' || section === 'final') && (
+        <div className="content-form-grid">
+          <label>Kod yozish uchun boshlang'ich input<textarea value={code} onChange={(event) => setCode(event.target.value)} placeholder="# Kodi shu yerga yozing" /></label>
+          <label>Tekshiruv kalit so'zlari<textarea value={checkWords} onChange={(event) => setCheckWords(event.target.value)} placeholder="print; input; name" /></label>
+        </div>
+      )}
+      <button className="primary" onClick={saveManualQuestion}><Save size={18} /> {config.button}</button>
+      {mode === 'test' && <label className="upload-box"><Upload size={24} /> Excel fayl yuklash<input type="file" accept=".xlsx,.xls,.csv" onChange={importExcel} /></label>}
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
       <div className="question-table">
-        {questions.map((item, index) => <p key={item.id}><b>{index + 1}</b><span>{item.direction}</span><span>{item.section}</span><em>{item.question}</em></p>)}
+        {controlQuestions.map((item, index) => <p key={item.id}><b>{index + 1}</b><span>{item.direction}</span><span>{getSectionLabel(item.section)}</span><em>{item.question}</em></p>)}
       </div>
     </section>
   );
@@ -1850,6 +2436,7 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
   const [title, setTitle] = useState(initialContent.title || currentLessons[0] || '');
   const [videoUrl, setVideoUrl] = useState(initialContent.videoUrl || '');
   const [text, setText] = useState(initialContent.text || '');
+  const [codeSnippet, setCodeSnippet] = useState(initialContent.codeSnippet || '');
   const [message, setMessage] = useState('');
 
   function selectDirection(value) {
@@ -1865,6 +2452,7 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
     setTitle(content.title || value);
     setVideoUrl(content.videoUrl || '');
     setText(content.text || '');
+    setCodeSnippet(content.codeSnippet || '');
   }
 
   function saveLesson() {
@@ -1874,19 +2462,21 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
         title: title.trim() || topic,
         videoUrl: videoUrl.trim(),
         text: text.trim() || 'Dars matni hali kiritilmagan.',
+        codeSnippet: codeSnippet.trim(),
       },
     }));
     setMessage(`${direction} / ${topic} darsi saqlandi.`);
   }
 
   return (
-    <section className="panel form-panel">
+    <section className="panel lesson-page">
       <Title title="Nazariy dars qo'shish" />
       <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
       <label>Mavzu<select value={topic} onChange={(event) => selectTopic(event.target.value)}>{currentLessons.map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
       <label>Sarlavha<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="O'zgaruvchilar nima?" /></label>
       <label>Video URL yoki fayl<input value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://youtube.com/..." /></label>
       <label>Matn<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Dars matni..." /></label>
+      <label>Tavsiya etilgan kod namunasi (Dinamik ko'rsatish uchun)<textarea value={codeSnippet} onChange={(event) => setCodeSnippet(event.target.value)} placeholder="name = 'Ali'..." /></label>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
       <button className="primary" onClick={saveLesson}><Save size={18} /> Saqlash</button>
     </section>

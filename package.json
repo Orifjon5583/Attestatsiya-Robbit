@@ -16,7 +16,12 @@
     "pg": "^8.13.1",
     "react": "latest",
     "react-dom": "latest",
+    "redis": "^4.7.1",
     "vite": "latest",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "tailwindcss": "^4.3.0"
   }
 }
