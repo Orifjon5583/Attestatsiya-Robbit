@@ -248,37 +248,45 @@ async function main() {
     check('theory page renders', body.includes("O'zgaruvchi nima?"));
 
     check('open practice', await clickByText('Keyingi: Amaliyot'));
-    body = await text();
-    check('practice page renders', body.includes('Yechimni tekshirish'));
+    check('practice page renders', await waitForCondition(async () => (await text()).includes('Yechimni tekshirish')));
+
+    await evaluate(`
+      (() => {
+        const el = document.querySelector('textarea.code-editor');
+        if (!el) return false;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(el, 'name = "Ali"\\nage = 15\\nprint(name)\\nprint(age)');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()
+    `);
+    await wait(200);
 
     check('check practice', await clickByText('Yechimni tekshirish'));
-    body = await text();
-    check('practice result shown', body.includes('Yechim qabul qilindi.'));
+    check('practice result shown', await waitForCondition(async () => (await text()).includes('Yechim qabul qilindi.')));
 
     check('open test tab', await clickByText('Test'));
     await evaluate("document.querySelector('.answers button')?.click()");
     await wait(100);
     check('advance test', await clickAnyText(['Yakunlash', 'Keyingi savol']));
-    body = await text();
-    check('final task renders', body.includes('Yakuniy topshiriq'));
+    check('final task renders', await waitForCondition(async () => (await text()).includes('Yakuniy topshiriq')));
 
     check('submit final task', await clickByText('Topshirish'));
-    body = await text();
-    check('exam renders', body.includes('Yakuniy imtihon'));
+    check('exam renders', await waitForCondition(async () => (await text()).includes('Yakuniy imtihon')));
 
     await evaluate("document.querySelector('.answers button:nth-child(2)')?.click()");
     await wait(100);
     check('finish exam', await clickAnyText(['Yakunlash', 'Keyingi savol']));
-    body = await text();
-    check('result renders', body.includes('Tabriklaymiz!'));
+    check('result renders', await waitForCondition(async () => (await text()).includes('Tabriklaymiz!')));
 
     check('open certificate', await clickByText("Sertifikatni ko'rish"));
-    body = await text();
-    check('certificate renders', body.includes('SERTIFIKAT') && body.includes('Yuklab olish'));
+    check('certificate renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes('SERTIFIKAT') && b.includes('Yuklab olish');
+    }));
 
     check('logout returns login', await clickNav('Chiqish'));
-    body = await text();
-    check('login after logout renders', body.includes('Tizimga kirish'));
+    check('login after logout renders', await waitForCondition(async () => (await text()).includes('Tizimga kirish')));
 
     check('admin login click', await clickButtonExact('Admin sifatida kirish'));
     check('admin login', await waitForCondition(async () => (await text()).includes('Admin panel')));
@@ -286,24 +294,34 @@ async function main() {
     check('admin dashboard renders', body.includes('Admin panel') && body.includes('Boshqaruv paneli') && body.includes('Ish tartibi'));
 
     check('admin directions page', await clickNav("Yo'nalish qo'shish"));
-    body = await text();
-    check('admin directions renders', body.includes("Yo'nalish qo'shish") && body.includes('Platformaga yangi'));
+    check('admin directions renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes("Yo'nalish qo'shish") && b.includes('Platformaga yangi');
+    }));
 
     check('admin questions page', await clickNav('Test va nazoratlar'));
-    body = await text();
-    check('admin questions renders', body.includes('Test va nazoratlar') && body.includes('Admin sharti'));
+    check('admin questions renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes('Test va nazoratlar') && b.includes('Admin sharti');
+    }));
 
     check('admin access page', await clickNav('Ruxsatlar'));
-    body = await text();
-    check('admin access renders', body.includes('Ruxsatlarni boshqarish') && body.includes('Ochiq mavzu'));
+    check('admin access renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes('Ruxsatlarni boshqarish') && b.includes('Ochiq mavzu');
+    }));
 
     check('admin topic page', await clickNav("Mavzu qo'shish"));
-    body = await text();
-    check('admin topic renders', body.includes("Yangi mavzu qo'shish") && body.includes('Saqlash'));
+    check('admin topic renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes("Yangi mavzu qo'shish") && b.includes('Saqlash');
+    }));
 
     check('admin lesson page', await clickNav("Dars qo'shish"));
-    body = await text();
-    check('admin lesson renders', body.includes("Nazariy dars qo'shish") && body.includes('Video URL'));
+    check('admin lesson renders', await waitForCondition(async () => {
+      const b = await text();
+      return b.includes("Nazariy dars qo'shish") && b.includes('Video URL');
+    }));
   } finally {
     client?.close();
     if (!chrome.killed) chrome.kill();

@@ -723,7 +723,7 @@ function Sidebar({ role, screen, setScreen, onLogout }) {
   const groups = role === 'admin' ? adminNav : [{ title: '', items: nav }];
   const defaultOpenGroups = Object.fromEntries(groups.map((group) => [
     group.title || 'main',
-    !group.title || group.items.some((item) => item.id === screen),
+    true,
   ]));
   const [openGroups, setOpenGroups] = useState(defaultOpenGroups);
 
@@ -732,12 +732,11 @@ function Sidebar({ role, screen, setScreen, onLogout }) {
       const next = { ...current };
       groups.forEach((group) => {
         const key = group.title || 'main';
-        if (!group.title || group.items.some((item) => item.id === screen)) next[key] = true;
-        if (!(key in next)) next[key] = !group.title;
+        if (!(key in next)) next[key] = true;
       });
       return next;
     });
-  }, [groups, screen]);
+  }, [groups]);
 
   function toggleGroup(key) {
     setOpenGroups((current) => ({ ...current, [key]: !current[key] }));

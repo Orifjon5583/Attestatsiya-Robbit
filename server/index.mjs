@@ -24,9 +24,6 @@ const pool = new Pool({
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json({ limit: '5mb' }));
 
-app.get('/', (_request, response) => {
-  response.send('Attestatsiya-Robbit API ishlayapti. Tekshirish: /api/health');
-});
 
 async function ensureSchema() {
   await pool.query(`
