@@ -150,6 +150,25 @@ function getYouTubeEmbedUrl(url) {
   return null;
 }
 
+function getMediaTypeFromUrl(url, fallback = 'auto') {
+  if (fallback && fallback !== 'auto') return fallback;
+  const cleanUrl = String(url || '').split('?')[0].toLowerCase();
+  if (getYouTubeEmbedUrl(url)) return 'youtube';
+  if (/\.(png|jpe?g|webp|gif|svg)$/.test(cleanUrl)) return 'image';
+  if (/\.(mp4|webm|ogg)$/.test(cleanUrl)) return 'video';
+  if (/\.(mp3|wav|m4a|oga)$/.test(cleanUrl)) return 'audio';
+  if (/\.pdf$/.test(cleanUrl)) return 'pdf';
+  return url ? 'link' : 'empty';
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Faylni o\'qib bo\'lmadi.'));
+    reader.readAsDataURL(file);
+  });
+}
 function getDefaultCodeSnippet(direction, lesson) {
   const dir = String(direction || '').toLowerCase();
   if (dir.includes('python')) {
@@ -1166,8 +1185,10 @@ function TheoryPage({ setScreen, selectedDirection, selectedLesson, courseLesson
     codeSnippet: '',
   };
 
+  const mediaUrl = content.mediaUrl || content.videoUrl || '';
+  const mediaType = getMediaTypeFromUrl(mediaUrl, content.mediaType || 'auto');
   const codeSnippet = content.codeSnippet || getDefaultCodeSnippet(selectedDirection, lesson);
-  const ytUrl = getYouTubeEmbedUrl(content.videoUrl);
+  const ytUrl = mediaType === 'youtube' ? getYouTubeEmbedUrl(mediaUrl) : null;
   const theoryQuestions = getQuestions(questions, selectedDirection, lesson, 'theory');
 
   return (
@@ -1189,20 +1210,42 @@ function TheoryPage({ setScreen, selectedDirection, selectedLesson, courseLesson
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-6">
         <div className="flex flex-col gap-6">
-          {content.videoUrl ? (
+          {mediaUrl ? (
             ytUrl ? (
               <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 group">
                 <iframe
                   className="absolute top-0 left-0 w-full h-full border-0"
                   src={ytUrl}
-                  title="YouTube video player"
+                  title={content.mediaName || 'YouTube video player'}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                   allowFullScreen
                 ></iframe>
               </div>
-            ) : (
+            ) : mediaType === 'image' ? (
+              <figure className="lesson-media-frame image-frame">
+                <img src={mediaUrl} alt={content.mediaName || content.title || lesson} />
+              </figure>
+            ) : mediaType === 'audio' ? (
+              <div className="lesson-media-frame audio-frame">
+                <FileCode size={34} />
+                <b>{content.mediaName || 'Audio dars'}</b>
+                <audio src={mediaUrl} controls />
+              </div>
+            ) : mediaType === 'pdf' ? (
+              <div className="lesson-media-frame document-frame">
+                <FileCode size={42} />
+                <b>{content.mediaName || 'PDF material'}</b>
+                <a href={mediaUrl} target="_blank" rel="noreferrer">PDF faylni ochish</a>
+              </div>
+            ) : mediaType === 'video' ? (
               <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 p-1 flex items-center justify-center">
-                <video className="w-full h-full object-cover rounded-lg" src={content.videoUrl} controls />
+                <video className="w-full h-full object-cover rounded-lg" src={mediaUrl} controls />
+              </div>
+            ) : (
+              <div className="lesson-media-frame document-frame">
+                <FileCode size={42} />
+                <b>{content.mediaName || 'Media havola'}</b>
+                <a href={mediaUrl} target="_blank" rel="noreferrer">Materialni ochish</a>
               </div>
             )
           ) : (
@@ -1234,10 +1277,10 @@ function TheoryPage({ setScreen, selectedDirection, selectedLesson, courseLesson
               {content.title}
             </h3>
             <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{content.text}</p>
-            {content.videoUrl && !ytUrl && (
+            {mediaUrl && !ytUrl && mediaType !== 'pdf' && mediaType !== 'link' && (
               <p className="mt-2">
                 <a
-                  href={content.videoUrl}
+                  href={mediaUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 underline"
@@ -2434,7 +2477,10 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
   const [topic, setTopic] = useState(currentLessons[0] || '');
   const initialContent = getLessonContent(lessonContents, direction, currentLessons[0] || '');
   const [title, setTitle] = useState(initialContent.title || currentLessons[0] || '');
-  const [videoUrl, setVideoUrl] = useState(initialContent.videoUrl || '');
+  const [videoUrl, setVideoUrl] = useState(initialContent.mediaUrl || initialContent.videoUrl || '');
+  const [mediaType, setMediaType] = useState(initialContent.mediaType || 'auto');
+  const [mediaName, setMediaName] = useState(initialContent.mediaName || '');
+  const [mediaUploadStatus, setMediaUploadStatus] = useState('');
   const [text, setText] = useState(initialContent.text || '');
   const [codeSnippet, setCodeSnippet] = useState(initialContent.codeSnippet || '');
   const [message, setMessage] = useState('');
@@ -2450,17 +2496,49 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
     const content = getLessonContent(lessonContents, nextDirection, value);
     setTopic(value);
     setTitle(content.title || value);
-    setVideoUrl(content.videoUrl || '');
+    setVideoUrl(content.mediaUrl || content.videoUrl || '');
+    setMediaType(content.mediaType || 'auto');
+    setMediaName(content.mediaName || '');
+    setMediaUploadStatus('');
     setText(content.text || '');
     setCodeSnippet(content.codeSnippet || '');
   }
 
+  async function uploadMedia(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 12 * 1024 * 1024) {
+      setMediaUploadStatus('Fayl hajmi 12 MB dan oshmasin. Katta videolar uchun YouTube yoki tashqi havola ishlating.');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      setMediaUploadStatus('Media yuklanmoqda...');
+      const dataUrl = await readFileAsDataUrl(file);
+      const result = await apiRequest('/admin/media', {
+        method: 'POST',
+        body: JSON.stringify({ name: file.name, dataUrl }),
+      });
+      setVideoUrl(result.url);
+      setMediaType(result.mediaType || getMediaTypeFromUrl(result.url));
+      setMediaName(result.mediaName || file.name);
+      setMediaUploadStatus(`${file.name} yuklandi. Endi darsni saqlang.`);
+    } catch (error) {
+      setMediaUploadStatus(error.message || 'Media faylni yuklab bo\'lmadi.');
+    } finally {
+      event.target.value = '';
+    }
+  }
   function saveLesson() {
     setLessonContents((current) => ({
       ...current,
       [getLessonContentKey(direction, topic)]: {
         title: title.trim() || topic,
         videoUrl: videoUrl.trim(),
+        mediaUrl: videoUrl.trim(),
+        mediaType,
+        mediaName: mediaName.trim(),
         text: text.trim() || 'Dars matni hali kiritilmagan.',
         codeSnippet: codeSnippet.trim(),
       },
@@ -2474,7 +2552,13 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
       <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
       <label>Mavzu<select value={topic} onChange={(event) => selectTopic(event.target.value)}>{currentLessons.map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
       <label>Sarlavha<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="O'zgaruvchilar nima?" /></label>
-      <label>Video URL yoki fayl<input value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://youtube.com/..." /></label>
+      <div className="content-form-grid">
+        <label>Media turi<select value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="auto">Avto aniqlash</option><option value="youtube">YouTube</option><option value="video">Video</option><option value="image">Rasm</option><option value="audio">Audio</option><option value="pdf">PDF</option><option value="link">Havola</option></select></label>
+        <label>Media nomi<input value={mediaName} onChange={(event) => setMediaName(event.target.value)} placeholder="Masalan: HTML kirish videosi" /></label>
+      </div>
+      <label>Media URL<input value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://youtube.com/... yoki /uploads/fayl.mp4" /></label>
+      <label className="upload-box media-upload-box"><Upload size={24} /> Media fayl yuklash<input type="file" accept="image/*,video/mp4,video/webm,audio/*,.pdf,application/pdf" onChange={uploadMedia} /></label>
+      {mediaUploadStatus && <div className="notice"><InfoIcon size={18} /> {mediaUploadStatus}</div>}
       <label>Matn<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Dars matni..." /></label>
       <label>Tavsiya etilgan kod namunasi (Dinamik ko'rsatish uchun)<textarea value={codeSnippet} onChange={(event) => setCodeSnippet(event.target.value)} placeholder="name = 'Ali'..." /></label>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}

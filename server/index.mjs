@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -14,6 +14,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const distPath = join(__dirname, '..', 'dist');
+const uploadsPath = join(__dirname, '..', 'uploads');
 const isProduction = process.env.NODE_ENV === 'production';
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const jwtSecret = process.env.JWT_SECRET || 'dev-only-change-this-secret-before-production';
@@ -29,6 +30,7 @@ const apiRateBanMs = Number(process.env.API_RATE_BAN_MS || 5 * 60_000);
 const codeExecutionTimeoutMs = Number(process.env.CODE_EXECUTION_TIMEOUT_MS || 2_000);
 const codeOutputLimit = Number(process.env.CODE_OUTPUT_LIMIT || 10_000);
 const codeBodyLimitBytes = Number(process.env.CODE_BODY_LIMIT_BYTES || 50 * 1024);
+const mediaUploadLimitBytes = Number(process.env.MEDIA_UPLOAD_LIMIT_BYTES || 12 * 1024 * 1024);
 const codeRateWindowMs = Number(process.env.CODE_RATE_WINDOW_MS || 60_000);
 const codeRateMax = Number(process.env.CODE_RATE_MAX || 20);
 const codeRateBanMs = Number(process.env.CODE_RATE_BAN_MS || 15 * 60_000);
@@ -576,7 +578,7 @@ function securityHeaders(_request, response, next) {
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self'",
-    "frame-src https://www.youtube.com",
+    "frame-src 'self' https://www.youtube.com",
     "media-src 'self' https:",
     "object-src 'none'",
     "base-uri 'self'",
@@ -586,6 +588,25 @@ function securityHeaders(_request, response, next) {
   next();
 }
 
+const mediaTypes = {
+  'image/png': { extension: 'png', type: 'image' },
+  'image/jpeg': { extension: 'jpg', type: 'image' },
+  'image/webp': { extension: 'webp', type: 'image' },
+  'image/gif': { extension: 'gif', type: 'image' },
+  'video/mp4': { extension: 'mp4', type: 'video' },
+  'video/webm': { extension: 'webm', type: 'video' },
+  'audio/mpeg': { extension: 'mp3', type: 'audio' },
+  'audio/wav': { extension: 'wav', type: 'audio' },
+  'audio/ogg': { extension: 'ogg', type: 'audio' },
+  'application/pdf': { extension: 'pdf', type: 'pdf' },
+};
+
+function safeUploadName(value) {
+  return String(value || 'media')
+    .replace(/[^\w.\-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'media';
+}
 function requireAuth(request, response, next) {
   const cookies = parseCookies(request.get('cookie'));
   const session = verifyToken(cookies[sessionCookieName]);
@@ -772,6 +793,58 @@ app.use('/api', rateLimit({
   banMs: apiRateBanMs,
   scope: 'api',
 }));
+app.post(
+  '/api/admin/media',
+  requireAuth,
+  requireCsrf,
+  requireAdmin,
+  express.json({ limit: `${Math.ceil(mediaUploadLimitBytes * 1.4)}b`, strict: true }),
+  async (request, response) => {
+    try {
+      const name = safeUploadName(request.body?.name);
+      const dataUrl = String(request.body?.dataUrl || '');
+      const match = dataUrl.match(/^data:([^;]+);base64,([A-Za-z0-9+/=]+)$/);
+      if (!match) {
+        response.status(400).json({ message: 'Media fayl formati noto\'g\'ri.' });
+        return;
+      }
+
+      const mimeType = match[1].toLowerCase();
+      const media = mediaTypes[mimeType];
+      if (!media) {
+        response.status(400).json({ message: 'Faqat rasm, video, audio yoki PDF yuklash mumkin.' });
+        return;
+      }
+
+      const buffer = Buffer.from(match[2], 'base64');
+      if (!buffer.length || buffer.length > mediaUploadLimitBytes) {
+        response.status(413).json({ message: 'Media fayl hajmi limitdan katta.' });
+        return;
+      }
+
+      await mkdir(uploadsPath, { recursive: true });
+      const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${name.replace(/\.[^.]+$/, '')}.${media.extension}`;
+      await writeFile(join(uploadsPath, filename), buffer, { flag: 'wx' });
+      await writeSecurityLog('admin_media_uploaded', {
+        ip: request.clientIp,
+        admin: request.user.email,
+        name,
+        type: media.type,
+        size: buffer.length,
+      });
+      response.status(201).json({
+        url: `/uploads/${filename}`,
+        mediaType: media.type,
+        mediaName: name,
+        mimeType,
+        size: buffer.length,
+      });
+    } catch (error) {
+      await writeSecurityLog('admin_media_upload_error', { ip: request.clientIp, admin: request.user?.email, message: error.message });
+      response.status(500).json({ message: 'Media faylni yuklab bo\'lmadi.' });
+    }
+  },
+);
 app.use(express.json({ limit: '1mb', strict: true }));
 
 app.get('/api/health', async (_request, response) => {
@@ -1057,6 +1130,13 @@ app.put('/api/app-state', requireAuth, requireCsrf, async (request, response) =>
     response.status(500).json({ message: 'Failed to save app state' });
   }
 });
+
+app.use('/uploads', express.static(uploadsPath, {
+  dotfiles: 'deny',
+  etag: true,
+  index: false,
+  maxAge: isProduction ? '7d' : 0,
+}));
 
 app.use(express.static(distPath, {
   dotfiles: 'deny',
