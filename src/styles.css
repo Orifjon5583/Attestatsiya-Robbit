@@ -1199,7 +1199,7 @@ dd { margin: 0; }
   margin: 0;
   padding: 12px;
   display: grid;
-  grid-template-columns: 42px 170px 86px 1fr;
+  grid-template-columns: 42px 170px 110px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   border-radius: 6px;
@@ -1207,6 +1207,19 @@ dd { margin: 0; }
 }
 
 .question-table em { color: #dce8f7; font-style: normal; }
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-btn {
+  border-color: rgba(248, 113, 113, .35);
+  color: #fecaca;
+  background: rgba(127, 29, 29, .28);
+}
+
 .compact-table p {
   grid-template-columns: 42px 1fr 120px 80px;
 }

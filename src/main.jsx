@@ -11,6 +11,7 @@ import {
   Code2,
   Cpu,
   Download,
+  Edit3,
   Eye,
   FileCode,
   FileQuestion,
@@ -27,6 +28,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Trash2,
   Trophy,
   Upload,
   User,
@@ -78,6 +80,15 @@ function splitList(value) {
     .split(/[\n;|]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function shuffleItems(items) {
+  const next = [...items];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(Math.random() * (index + 1));
+    [next[index], next[target]] = [next[target], next[index]];
+  }
+  return next;
 }
 
 function createId() {
@@ -1452,9 +1463,20 @@ function getChoiceQuestions(questions, selectedDirection, lesson, section = 'tes
   return starterQuestions.filter((item) => item.section === section && item.answers?.length).slice(0, 1);
 }
 
+function shuffleQuizQuestions(items) {
+  return shuffleItems(items).map((item) => ({
+    ...item,
+    shuffledAnswers: shuffleItems((item.answers || []).map((text, index) => ({ text, index }))),
+  }));
+}
+
 function TestPage({ setScreen, questions, selectedDirection, selectedLesson, courseLessons, setResult }) {
   const lesson = getCurrentLesson(courseLessons, selectedLesson);
-  const testQuestions = getChoiceQuestions(questions, selectedDirection, lesson);
+  const sourceQuestions = getChoiceQuestions(questions, selectedDirection, lesson);
+  const testQuestions = useMemo(
+    () => shuffleQuizQuestions(sourceQuestions),
+    [lesson, selectedDirection, sourceQuestions.length, questions],
+  );
   const [questionIndex, setQuestionIndex] = useState(0);
   const question = testQuestions[questionIndex] || starterQuestions[0];
   const [answer, setAnswer] = useState(null);
@@ -1492,7 +1514,7 @@ function TestPage({ setScreen, questions, selectedDirection, selectedLesson, cou
       <div className="quiz-head"><b>Test savollari</b><span>{questionIndex + 1} / {testQuestions.length}</span></div>
       <h3>{question.question}</h3>
       <div className="answers">
-        {question.answers.map((item, index) => <button key={item} className={answer === index ? 'selected' : ''} onClick={() => setAnswer(index)}>{String.fromCharCode(65 + index)}) {item}</button>)}
+        {(question.shuffledAnswers || []).map((item, index) => <button key={`${question.id}-${item.index}`} className={answer === item.index ? 'selected' : ''} onClick={() => setAnswer(item.index)}>{String.fromCharCode(65 + index)}) {item.text}</button>)}
       </div>
       <button className="primary" disabled={answer === null} onClick={next}><ArrowRight size={18} /> {questionIndex < testQuestions.length - 1 ? 'Keyingi savol' : 'Yakunlash'}</button>
     </section>
@@ -1566,7 +1588,11 @@ function FinalTaskPage({ setScreen, questions, selectedDirection, selectedLesson
 
 function ExamPage({ setScreen, questions, selectedDirection, selectedLesson, courseLessons, setResult, completeDirection }) {
   const lesson = getCurrentLesson(courseLessons, selectedLesson);
-  const examQuestions = getChoiceQuestions(questions, selectedDirection, lesson, 'exam');
+  const sourceQuestions = getChoiceQuestions(questions, selectedDirection, lesson, 'exam');
+  const examQuestions = useMemo(
+    () => shuffleQuizQuestions(sourceQuestions),
+    [lesson, selectedDirection, sourceQuestions.length, questions],
+  );
   const [questionIndex, setQuestionIndex] = useState(0);
   const question = examQuestions[questionIndex] || starterQuestions[2];
   const [answer, setAnswer] = useState(null);
@@ -1604,7 +1630,7 @@ function ExamPage({ setScreen, questions, selectedDirection, selectedLesson, cou
       <h3>Yakuniy imtihon</h3>
       <p>{question.question}</p>
       <div className="answers">
-        {question.answers.map((item, index) => <button key={item} className={answer === index ? 'selected' : ''} onClick={() => setAnswer(index)}>{String.fromCharCode(65 + index)}) {item}</button>)}
+        {(question.shuffledAnswers || []).map((item, index) => <button key={`${question.id}-${item.index}`} className={answer === item.index ? 'selected' : ''} onClick={() => setAnswer(item.index)}>{String.fromCharCode(65 + index)}) {item.text}</button>)}
       </div>
       <button className="primary" disabled={answer === null} onClick={next}><ArrowRight size={18} /> {questionIndex < examQuestions.length - 1 ? 'Keyingi savol' : 'Yakunlash'}</button>
     </section>
@@ -2183,6 +2209,7 @@ function AdminTheoryQuestions({ questions, setQuestions, directions, directionLe
   const [topic, setTopic] = useState((directionLessons[directions[0]?.title] || lessons)[0] || '');
   const [question, setQuestion] = useState('');
   const [theoryAnswer, setTheoryAnswer] = useState('');
+  const [editingId, setEditingId] = useState(null);
 
   const theoryQuestions = questions.filter((item) => item.section === 'theory');
 
@@ -2190,6 +2217,12 @@ function AdminTheoryQuestions({ questions, setQuestions, directions, directionLe
     const topics = directionLessons[value] || [];
     setDirection(value);
     setTopic(topics[0] || '');
+  }
+
+  function resetTheoryForm() {
+    setQuestion('');
+    setTheoryAnswer('');
+    setEditingId(null);
   }
 
   function saveTheoryQuestion() {
@@ -2211,10 +2244,26 @@ function AdminTheoryQuestions({ questions, setQuestions, directions, directionLe
       points: 0,
     };
 
-    setQuestions((current) => [...current, item]);
-    setQuestion('');
-    setTheoryAnswer('');
-    setMessage('Nazariy savol alohida bo\'limga qo\'shildi.');
+    setQuestions((current) => (editingId
+      ? current.map((currentItem) => (currentItem.id === editingId ? { ...currentItem, ...item, id: editingId } : currentItem))
+      : [...current, item]));
+    resetTheoryForm();
+    setMessage(editingId ? 'Nazariy savol tahrirlandi.' : 'Nazariy savol alohida bo\'limga qo\'shildi.');
+  }
+
+  function editTheoryQuestion(item) {
+    selectDirection(item.direction);
+    setTopic(item.topic);
+    setQuestion(item.question || '');
+    setTheoryAnswer(item.theoryAnswer || '');
+    setEditingId(item.id);
+    setMessage('Tahrirlash rejimi yoqildi.');
+  }
+
+  function deleteTheoryQuestion(id) {
+    setQuestions((current) => current.filter((item) => item.id !== id));
+    if (editingId === id) resetTheoryForm();
+    setMessage('Nazariy savol o\'chirildi.');
   }
 
   return (
@@ -2227,9 +2276,23 @@ function AdminTheoryQuestions({ questions, setQuestions, directions, directionLe
       <label>Nazariy savol<textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Masalan: O'zgaruvchi nima va nima uchun kerak?" /></label>
       <label>Javob / izoh<textarea value={theoryAnswer} onChange={(event) => setTheoryAnswer(event.target.value)} placeholder="O'quvchi ko'rishi uchun qisqa izoh yoki javob." /></label>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
-      <button className="primary" onClick={saveTheoryQuestion}><Save size={18} /> Nazariy savol qo'shish</button>
+      <div className="actions">
+        <button className="primary" onClick={saveTheoryQuestion}><Save size={18} /> {editingId ? 'O\'zgarishni saqlash' : 'Nazariy savol qo\'shish'}</button>
+        {editingId && <button className="ghost" onClick={resetTheoryForm}>Bekor qilish</button>}
+      </div>
       <div className="question-table">
-        {theoryQuestions.map((item, index) => <p key={item.id}><b>{index + 1}</b><span>{item.direction}</span><span>{item.topic}</span><em>{item.question}</em></p>)}
+        {theoryQuestions.map((item, index) => (
+          <p key={item.id}>
+            <b>{index + 1}</b>
+            <span>{item.direction}</span>
+            <span>{item.topic}</span>
+            <em>{item.question}</em>
+            <span className="row-actions">
+              <button className="icon-btn small" onClick={() => editTheoryQuestion(item)} title="Tahrirlash"><Edit3 size={15} /></button>
+              <button className="icon-btn small danger-btn" onClick={() => deleteTheoryQuestion(item.id)} title="O'chirish"><Trash2 size={15} /></button>
+            </span>
+          </p>
+        ))}
       </div>
     </section>
   );
@@ -2287,6 +2350,7 @@ function AdminQuestions({ mode = 'test', questions, setQuestions, directions, di
   const [correct, setCorrect] = useState(0);
   const [code, setCode] = useState('# Kodi shu yerga yozing');
   const [checkWords, setCheckWords] = useState('');
+  const [editingId, setEditingId] = useState(null);
   const controlQuestions = questions.filter((item) => config.listSections.includes(item.section));
 
   useEffect(() => {
@@ -2294,12 +2358,22 @@ function AdminQuestions({ mode = 'test', questions, setQuestions, directions, di
     setMessage('');
     setAnswerOptions(['', '', '', '']);
     setCorrect(0);
+    setEditingId(null);
   }, [config.defaultSection, mode]);
 
   function selectDirection(value) {
     const topics = directionLessons[value] || [];
     setDirection(value);
     setTopic(topics[0] || '');
+  }
+
+  function resetQuestionForm() {
+    setQuestion('');
+    setAnswerOptions(['', '', '', '']);
+    setCorrect(0);
+    setCode('# Kodi shu yerga yozing');
+    setCheckWords('');
+    setEditingId(null);
   }
 
   function saveManualQuestion() {
@@ -2328,13 +2402,31 @@ function AdminQuestions({ mode = 'test', questions, setQuestions, directions, di
       checkWords: splitList(checkWords),
       points: section === 'practice' ? 8 : 4,
     };
-    setQuestions((current) => [...current, item]);
-    setQuestion('');
-    setAnswerOptions(['', '', '', '']);
-    setCorrect(0);
-    setCode('# Kodi shu yerga yozing');
-    setCheckWords('');
-    setMessage(`${getSectionLabel(section)} qo'shildi.`);
+    setQuestions((current) => (editingId
+      ? current.map((currentItem) => (currentItem.id === editingId ? { ...currentItem, ...item, id: editingId } : currentItem))
+      : [...current, item]));
+    resetQuestionForm();
+    setMessage(editingId ? `${getSectionLabel(section)} tahrirlandi.` : `${getSectionLabel(section)} qo'shildi.`);
+  }
+
+  function editQuestion(item) {
+    const topics = directionLessons[item.direction] || [];
+    setDirection(item.direction);
+    setTopic(topics.includes(item.topic) ? item.topic : (item.topic || topics[0] || ''));
+    setSection(item.section || config.defaultSection);
+    setQuestion(item.question || '');
+    setAnswerOptions([0, 1, 2, 3].map((index) => item.answers?.[index] || ''));
+    setCorrect(Number(item.correct) || 0);
+    setCode(item.code || '# Kodi shu yerga yozing');
+    setCheckWords((item.checkWords || []).join('; '));
+    setEditingId(item.id);
+    setMessage('Tahrirlash rejimi yoqildi.');
+  }
+
+  function deleteQuestion(id) {
+    setQuestions((current) => current.filter((item) => item.id !== id));
+    if (editingId === id) resetQuestionForm();
+    setMessage('Savol o\'chirildi.');
   }
 
   async function importExcel(event) {
@@ -2406,11 +2498,25 @@ function AdminQuestions({ mode = 'test', questions, setQuestions, directions, di
           <label>Tekshiruv kalit so'zlari<textarea value={checkWords} onChange={(event) => setCheckWords(event.target.value)} placeholder="print; input; name" /></label>
         </div>
       )}
-      <button className="primary" onClick={saveManualQuestion}><Save size={18} /> {config.button}</button>
+      <div className="actions">
+        <button className="primary" onClick={saveManualQuestion}><Save size={18} /> {editingId ? 'O\'zgarishni saqlash' : config.button}</button>
+        {editingId && <button className="ghost" onClick={resetQuestionForm}>Bekor qilish</button>}
+      </div>
       {mode === 'test' && <label className="upload-box"><Upload size={24} /> Excel fayl yuklash<input type="file" accept=".xlsx,.xls,.csv" onChange={importExcel} /></label>}
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
       <div className="question-table">
-        {controlQuestions.map((item, index) => <p key={item.id}><b>{index + 1}</b><span>{item.direction}</span><span>{getSectionLabel(item.section)}</span><em>{item.question}</em></p>)}
+        {controlQuestions.map((item, index) => (
+          <p key={item.id}>
+            <b>{index + 1}</b>
+            <span>{item.direction}</span>
+            <span>{getSectionLabel(item.section)}</span>
+            <em>{item.question}</em>
+            <span className="row-actions">
+              <button className="icon-btn small" onClick={() => editQuestion(item)} title="Tahrirlash"><Edit3 size={15} /></button>
+              <button className="icon-btn small danger-btn" onClick={() => deleteQuestion(item.id)} title="O'chirish"><Trash2 size={15} /></button>
+            </span>
+          </p>
+        ))}
       </div>
     </section>
   );
@@ -2484,6 +2590,9 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
   const [text, setText] = useState(initialContent.text || '');
   const [codeSnippet, setCodeSnippet] = useState(initialContent.codeSnippet || '');
   const [message, setMessage] = useState('');
+  const savedLessons = currentLessons
+    .map((lesson) => ({ lesson, content: getLessonContent(lessonContents, direction, lesson) }))
+    .filter(({ content }) => content.title || content.text || content.mediaUrl || content.videoUrl || content.codeSnippet);
 
   function selectDirection(value) {
     const topics = directionLessons[value] || [];
@@ -2546,9 +2655,32 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
     setMessage(`${direction} / ${topic} darsi saqlandi.`);
   }
 
+  function editSavedLesson(lesson) {
+    selectTopic(lesson);
+    setMessage(`${lesson} tahrirlash uchun ochildi.`);
+  }
+
+  function deleteLessonContent(lesson) {
+    setLessonContents((current) => {
+      const next = { ...current };
+      delete next[getLessonContentKey(direction, lesson)];
+      delete next[lesson];
+      return next;
+    });
+    if (lesson === topic) {
+      setTitle(lesson);
+      setVideoUrl('');
+      setMediaType('auto');
+      setMediaName('');
+      setText('');
+      setCodeSnippet('');
+    }
+    setMessage(`${direction} / ${lesson} nazariy ma'lumoti o'chirildi.`);
+  }
+
   return (
     <section className="panel lesson-page">
-      <Title title="Nazariy dars qo'shish" />
+      <Title title="Nazariy dars qo'shish / tahrirlash" />
       <label>Yo'nalish<select value={direction} onChange={(event) => selectDirection(event.target.value)}>{directions.map((item) => <option key={item.title}>{item.title}</option>)}</select></label>
       <label>Mavzu<select value={topic} onChange={(event) => selectTopic(event.target.value)}>{currentLessons.map((lesson) => <option key={lesson}>{lesson}</option>)}</select></label>
       <label>Sarlavha<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="O'zgaruvchilar nima?" /></label>
@@ -2563,6 +2695,20 @@ function AdminLesson({ directions, directionLessons, lessonContents, setLessonCo
       <label>Tavsiya etilgan kod namunasi (Dinamik ko'rsatish uchun)<textarea value={codeSnippet} onChange={(event) => setCodeSnippet(event.target.value)} placeholder="name = 'Ali'..." /></label>
       {message && <div className="notice"><CheckCircle2 size={18} /> {message}</div>}
       <button className="primary" onClick={saveLesson}><Save size={18} /> Saqlash</button>
+      <div className="question-table">
+        {savedLessons.map(({ lesson, content }, index) => (
+          <p key={getLessonContentKey(direction, lesson)}>
+            <b>{index + 1}</b>
+            <span>{direction}</span>
+            <span>{lesson}</span>
+            <em>{content.title || lesson}</em>
+            <span className="row-actions">
+              <button className="icon-btn small" onClick={() => editSavedLesson(lesson)} title="Tahrirlash"><Edit3 size={15} /></button>
+              <button className="icon-btn small danger-btn" onClick={() => deleteLessonContent(lesson)} title="O'chirish"><Trash2 size={15} /></button>
+            </span>
+          </p>
+        ))}
+      </div>
     </section>
   );
 }
