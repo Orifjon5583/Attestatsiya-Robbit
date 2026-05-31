@@ -21,6 +21,7 @@ import {
   Lock,
   LogIn,
   LogOut,
+  Menu,
   Plus,
   Printer,
   Rocket,
@@ -34,6 +35,7 @@ import {
   User,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import './styles.css';
 
@@ -992,6 +994,7 @@ function Sidebar({ role, screen, setScreen, onLogout }) {
     true,
   ]));
   const [openGroups, setOpenGroups] = useState(defaultOpenGroups);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     setOpenGroups((current) => {
@@ -1009,34 +1012,41 @@ function Sidebar({ role, screen, setScreen, onLogout }) {
   }
 
   return (
-    <aside className="sidebar">
-      <Brand />
-      <nav>
-        {groups.map((group) => {
-          const key = group.title || 'main';
-          const isOpen = Boolean(openGroups[key]);
-          return (
-          <div className={`nav-group ${isOpen ? 'open' : ''}`} key={key}>
-            {group.title && (
-              <button type="button" className="nav-group-toggle" onClick={() => toggleGroup(key)}>
-                <span>{group.title}</span>
-                <ArrowRight size={14} />
-              </button>
-            )}
-            {isOpen && (
-              <div className="nav-group-items">
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  return <button type="button" key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => setScreen(item.id)}><Icon size={17} /> {item.label}</button>;
-                })}
-              </div>
-            )}
-          </div>
-          );
-        })}
-      </nav>
-      <button type="button" className="logout" onClick={onLogout}><LogOut size={17} /> Chiqish</button>
-    </aside>
+    <>
+      <button type="button" className="mobile-menu-toggle" aria-label="Menyuni ochish" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu size={22} /></button>
+      {mobileOpen && <button type="button" className="sidebar-backdrop" aria-label="Menyuni yopish" onClick={() => setMobileOpen(false)} />}
+      <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+        <div className="sidebar-head">
+          <Brand />
+          <button type="button" className="sidebar-close" aria-label="Menyuni yopish" onClick={() => setMobileOpen(false)}><X size={20} /></button>
+        </div>
+        <nav>
+          {groups.map((group) => {
+            const key = group.title || 'main';
+            const isOpen = Boolean(openGroups[key]);
+            return (
+            <div className={`nav-group ${isOpen ? 'open' : ''}`} key={key}>
+              {group.title && (
+                <button type="button" className="nav-group-toggle" onClick={() => toggleGroup(key)}>
+                  <span>{group.title}</span>
+                  <ArrowRight size={14} />
+                </button>
+              )}
+              {isOpen && (
+                <div className="nav-group-items">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return <button type="button" key={item.id} className={screen === item.id ? 'active' : ''} onClick={() => { setScreen(item.id); setMobileOpen(false); }}><Icon size={17} /> {item.label}</button>;
+                  })}
+                </div>
+              )}
+            </div>
+            );
+          })}
+        </nav>
+        <button type="button" className="logout" onClick={() => { setMobileOpen(false); onLogout(); }}><LogOut size={17} /> Chiqish</button>
+      </aside>
+    </>
   );
 }
 
